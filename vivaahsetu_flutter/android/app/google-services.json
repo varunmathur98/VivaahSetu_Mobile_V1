@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "125166695153",
+    "project_id": "flutter-ai-playground-59a42",
+    "storage_bucket": "flutter-ai-playground-59a42.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:125166695153:android:0b81f669c7932a8febef50",
+        "android_client_info": {
+          "package_name": "Vivaahsetu.in"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "125166695153-p75lpip7k80vnt2c4mfgn7ci8nbnoqbh.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "Vivaahsetu.in",
+            "certificate_hash": "3dbc41ec76df458ad6b5e01e1a5dc1b203ac348a"
+          }
+        },
+        {
+          "client_id": "125166695153-frfr2u1qgvjlh00buou5hb5kcc8e2gfd.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGwpZJBeQRZDP5V5_i58BiqfucYH5a4Ec"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "125166695153-frfr2u1qgvjlh00buou5hb5kcc8e2gfd.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "125166695153-j5uco7g5373mfncuipct45b81cmt9ibb.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "Vivaahsetu.in"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

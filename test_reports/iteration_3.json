@@ -1,0 +1,97 @@
+{
+  "summary": "Iteration 3 testing completed. Backend: 33/33 tests passed (100%). Frontend: All new features working - DOB auto-calc, photo visibility toggle, match profile detail screen, Indian dropdowns, subscription pricing. One React Native warning persists from previous iteration.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {
+        "component": "Browse and Subscription screens",
+        "issue": "React Native warning: 'Unexpected text node: . A text node cannot be a child of a <View>'. This warning persists from iteration 1. Appears when rendering match cards and subscription page. Likely caused by bullet character (\\u2022) or other text nodes not wrapped in <Text> components.",
+        "priority": "MEDIUM",
+        "affected_screens": ["Browse", "Connections", "Subscription"],
+        "recommendation": "Review all components that use bullet points or mix icons with text. Ensure all text including special characters are wrapped in <Text> components."
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_vivahsetu_api.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix React Native text node warning in Browse, Connections, and Subscription screens (persisting issue from iteration 1)",
+    "Consider adding visual feedback when dropdowns are clicked (loading state or animation)",
+    "Add error boundary component to catch and display React Native errors gracefully"
+  ],
+  "critical_code_review_comments": [
+    "✓ Backend: DOB field properly saved and retrieved via PUT /api/profile/update",
+    "✓ Backend: photoVisibility field (yes/no) working correctly",
+    "✓ Backend: GET /api/profile/{userId} returns complete profile with DOB, photoVisibility, and all fields",
+    "✓ Backend: Profile visitor tracking implemented (profileVisitors array)",
+    "✓ Frontend: DOB auto-calculation working - calcAge() function correctly computes age from YYYY-MM-DD format",
+    "✓ Frontend: Age field is grayed out (disabled) and auto-populated from DOB",
+    "✓ Frontend: Photo visibility toggle (Switch component) present and functional",
+    "✓ Frontend: Indian state/city/caste/subcaste dropdowns implemented with comprehensive data",
+    "✓ Frontend: Cascading dropdowns work - selecting state updates city options, selecting religion updates caste options",
+    "✓ Frontend: Match profile detail screen (/match/[id].tsx) loads correctly with back button, user details, and gated content",
+    "✓ Frontend: Photo visibility logic implemented - free users see 'Upgrade to see photos' button",
+    "✓ Frontend: Contact details gated with lock icon for non-premium users",
+    "✓ Frontend: Subscription page shows correct pricing - Focus ₹699→₹210, Commit ₹1499→₹450",
+    "✓ Frontend: MOST POPULAR badge on Focus plan (red background, gold badge)",
+    "✓ Frontend: COMING SOON badge on Commit plan (grey badge)",
+    "✓ Frontend: Subscribe button disabled for Commit plan (not available yet)",
+    "⚠ React Native warning about text nodes persists (non-critical but should be fixed)"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_vivahsetu_api.py"
+  ],
+  "success_rate": {
+    "backend": "100% (33/33 tests passed, +4 new tests for iteration 3 features)",
+    "frontend": "95% (all core flows and new features working, 1 warning issue)"
+  },
+  "seed_data_creation": "Created test users: uitest_93823@example.com and dropdown_test_xxxxx@example.com for frontend testing. Backend tests create and cleanup their own test data with unique emails.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All iteration 3 features tested and working. New features: DOB-based age auto-calculation, photo visibility toggle, match profile detail screen with photo/contact gating, Indian state/city/caste/subcaste cascading dropdowns, updated subscription pricing with badges. React Native text node warning persists from iteration 1 - needs investigation of bullet characters and text wrapping. Test credentials in /app/memory/test_credentials.md. Public URL: https://bride-connect-3.preview.emergentagent.com",
+  "backend_test_details": {
+    "iteration_3_new_tests": {
+      "test_update_profile_with_dob_and_photo_visibility": "✓ PASSED - DOB and photoVisibility fields save and persist correctly",
+      "test_update_profile_photo_visibility_no": "✓ PASSED - photoVisibility='no' option works",
+      "test_get_user_profile_by_id": "✓ PASSED - GET /api/profile/{userId} returns complete profile with all new fields",
+      "test_get_user_profile_invalid_id": "✓ PASSED - Invalid user ID returns 404",
+      "test_profile_visitor_tracking": "✓ PASSED - Profile visits tracked in profileVisitors array"
+    },
+    "all_previous_tests": "✓ All 28 tests from iteration 1 still passing (auth, profile, matches, connections, subscriptions, payment, filters, partner preferences, success stories)"
+  },
+  "frontend_test_details": {
+    "iteration_3_new_features": {
+      "dob_auto_calculation": "✓ PASSED - DOB field accepts YYYY-MM-DD format, age auto-calculated and displayed in grayed-out field (e.g., 1995-06-15 → 30 years)",
+      "photo_visibility_toggle": "✓ PASSED - Switch component present with label 'Make photos visible?' and hint text explaining visibility rules",
+      "indian_state_dropdown": "✓ PASSED - State dropdown label found, comprehensive list of Indian states available",
+      "indian_city_dropdown": "✓ PASSED - City dropdown updates based on selected state (cascading dropdown)",
+      "religion_caste_dropdowns": "✓ PASSED - Religion and Caste dropdowns with cascading behavior (selecting religion updates caste options)",
+      "match_profile_detail_screen": "✓ PASSED - /match/[id].tsx loads with back button, user details (name, age, location, religion, education, occupation), About section, Family section",
+      "photo_visibility_gating": "✓ PASSED - Free users see 'Upgrade to see photos' button when photos are hidden or user doesn't have premium plan",
+      "contact_details_gating": "✓ PASSED - Contact details section shows lock icon and upgrade prompt for non-premium users",
+      "match_card_navigation": "✓ PASSED - Clicking match card navigates to /match/{id} detail screen",
+      "subscription_pricing_focus": "✓ PASSED - Focus plan shows ₹699 original, ₹210 discounted, MOST POPULAR badge (gold on red background)",
+      "subscription_pricing_commit": "✓ PASSED - Commit plan shows ₹1,499 original, ₹450 discounted, COMING SOON badge (grey)",
+      "subscription_discount_badge": "✓ PASSED - 70% OFF badge displayed on both Focus and Commit plans",
+      "subscribe_button": "✓ PASSED - Subscribe Now button found for Focus plan, Coming Soon button for Commit plan"
+    },
+    "all_previous_features": "✓ All features from iteration 1 still working (login, signup, home, browse, connections, messages, profile, tab navigation)"
+  },
+  "iteration_3_specific_findings": {
+    "dob_implementation": "DOB field in edit-profile.tsx correctly calculates age using calcAge() function. Age is displayed in a disabled input (grayed out). DOB format is YYYY-MM-DD. Backend stores DOB as string and returns it in profile responses.",
+    "photo_visibility_implementation": "Photo visibility toggle uses React Native Switch component. Backend stores photoVisibility as 'yes' or 'no' string. Match profile screen checks photoVisibility and user plan to determine if photos should be shown. Logic: showPhotos = photoVisible && (isConnected || myPlan !== 'free')",
+    "indian_data_implementation": "Comprehensive Indian data in /app/frontend/src/constants/indianData.ts includes: 33 states/UTs, major cities for each state (7-10 cities per state), religions (10 options), castes by religion (Hindu: 29 castes, Muslim: 12, Christian: 9, Sikh: 7, Jain: 4, Buddhist: 4), sub-castes for major castes (Brahmin: 10, Rajput: 8, Jat: 7, Patel: 4, Maratha: 5), marital statuses (5), education levels (24), professions (34), income ranges (11), heights (4'0\" to 7'0\"), mother tongues (26)",
+    "dropdown_implementation": "Dropdowns use DropdownField component with Modal for selection. Cascading logic: selecting state filters cities, selecting religion filters castes, selecting caste filters sub-castes. Modal has search/scroll capability for long lists.",
+    "match_profile_detail_implementation": "Match profile screen (/match/[id].tsx) fetches profile via GET /api/profile/{userId}. Implements photo visibility gating (canSeePhotos = isConnected || myPlan !== 'free'), contact details gating (canSeeContact = isConnected && myPlan !== 'free'), connection timer display for active connections, back button navigation, connect button for non-connected users.",
+    "subscription_page_implementation": "Subscription page shows 3 plans: Free (current plan badge), Focus (MOST POPULAR badge, red background #8B0000, gold badge #FFD700, available=true), Commit (COMING SOON badge, grey, available=false). Pricing with strikethrough original price and large discounted price. 70% OFF badge. Subscribe button calls POST /api/payment/create-order for Focus plan."
+  },
+  "rca_of_issue": "React Native text node warning: Root cause is text nodes (likely bullet character \\u2022 or spaces) appearing as direct children of <View> components instead of being wrapped in <Text> components. This violates React Native's requirement that all text must be inside <Text> components. The warning appears in Browse screen (match cards), Connections screen, and Subscription screen. Likely locations: match detail rows using icons + text, subscription feature lists with checkmarks/crosses. Mitigation: Wrap all text content including special characters in <Text> components. Ensure icon + text combinations use separate <View> containers for icon and <Text> for text content."
+}

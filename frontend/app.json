@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "VivahSetu",
+    "slug": "vivahsetu",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "vivahsetu",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vivahsetu.app",
+      "googleServicesFile": "../GoogleService-Info.plist"
+    },
+    "android": {
+      "package": "in.vivaahsetu.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "googleServicesFile": "../google-services.json"
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-image.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
+      "@react-native-google-signin/google-signin"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "googleWebClientId": "125166695153-frfr2u1qgvjlh00buou5hb5kcc8e2gfd.apps.googleusercontent.com"
+    },
+    "owner": "varunmathur98"
+  }
+}
