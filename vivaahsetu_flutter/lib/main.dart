@@ -249,8 +249,8 @@ Future<void> _launchPaymentUrl(BuildContext context, String link) async {
     );
     return;
   }
-  final launched = await launchUrl(uri, mode: LaunchMode.platformDefault) ||
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+  final launched = await launchUrl(uri, mode: LaunchMode.externalApplication) ||
+      await launchUrl(uri, mode: LaunchMode.platformDefault);
   if (launched || !context.mounted) return;
   await showDialog<void>(
     context: context,
@@ -360,7 +360,7 @@ class ApiClient {
           BaseOptions(
             baseUrl: '${_baseUrl.replaceAll(RegExp(r'/+$'), '')}/api',
             connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 30),
             headers: {'Content-Type': 'application/json'},
           ),
         );
@@ -503,16 +503,33 @@ class ApiClient {
     Map<String, dynamic> filters,
   ) async {
     final normalizedFilters = adapter.normalizeMatchFilters(filters);
-    final firstResponse = _normalizeResponseMap(
-      Map<String, dynamic>.from(
-        await _request(
-          'GET',
-          '/matches',
-          token: token,
-          queryParameters: normalizedFilters,
-        ) as Map,
-      ),
-    );
+    Map<String, dynamic> firstResponse;
+    try {
+      firstResponse = _normalizeResponseMap(
+        Map<String, dynamic>.from(
+          await _request(
+            'GET',
+            '/matches',
+            token: token,
+            queryParameters: normalizedFilters,
+          ) as Map,
+        ),
+      );
+    } catch (_) {
+      firstResponse = _normalizeResponseMap(
+        Map<String, dynamic>.from(
+          await _request(
+            'GET',
+            '/matches',
+            token: token,
+            queryParameters: {
+              if (normalizedFilters['page'] != null) 'page': normalizedFilters['page'],
+              if (normalizedFilters['limit'] != null) 'limit': normalizedFilters['limit'],
+            },
+          ) as Map,
+        ),
+      );
+    }
     final firstMatches = _asList(firstResponse['matches']);
     final hasCustomFilters = normalizedFilters.keys.any((key) => key != 'page' && key != 'limit');
     if (firstMatches.isNotEmpty || !hasCustomFilters) {
@@ -1576,30 +1593,31 @@ class _HomeTabState extends State<HomeTab> {
   int _unreadChats = 0;
   int _unreadNotifications = 0;
   List<dynamic> _previewMatches = <dynamic>[];
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) => _load());
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Map<String, dynamic> _partnerFilters(Map<String, dynamic> profile) {
     final prefs = _asMap(profile['partnerPreferences'] ?? profile['partner_preferences']);
-    String? first(dynamic value) {
-      final values = _asList(value)
-          .map((item) => item.toString().trim())
-          .where((item) => item.isNotEmpty)
-          .toList();
-      return values.isEmpty ? null : values.first;
-    }
 
     final filters = <String, dynamic>{'page': 1, 'limit': 4};
     if (prefs['age_min'] != null) filters['age_min'] = prefs['age_min'];
     if (prefs['age_max'] != null) filters['age_max'] = prefs['age_max'];
-    final location = first(prefs['location']);
-    final religion = first(prefs['religion']);
-    final caste = first(prefs['caste']);
-    final profession = first(prefs['profession']);
+    final location = _firstPreferenceValue(prefs['location']);
+    final religion = _firstPreferenceValue(prefs['religion']);
+    final caste = _firstPreferenceValue(prefs['caste']);
+    final profession = _firstPreferenceValue(prefs['profession']);
     if (location != null) filters['location'] = location;
     if (religion != null) filters['religion'] = religion;
     if (caste != null) filters['caste'] = caste;
@@ -2069,6 +2087,16 @@ class _HomeTabState extends State<HomeTab> {
                       try {
                         await widget.api.sendRequest(widget.token, id);
                         if (!mounted) return;
+                        setState(() {
+                          _previewMatches = _previewMatches.map((item) {
+                            final map = _asMap(item);
+                            if (map['id']?.toString() == id) {
+                              map['requestSent'] = true;
+                              map['request_sent'] = true;
+                            }
+                            return map;
+                          }).toList();
+                        });
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Connection request sent')),
                         );
@@ -2240,21 +2268,13 @@ class _BrowseTabState extends State<BrowseTab> {
 
   Map<String, dynamic> _partnerFiltersFromUser(Map<String, dynamic> user) {
     final prefs = _asMap(user['partnerPreferences'] ?? user['partner_preferences']);
-    String? first(dynamic value) {
-      final values = _asList(value)
-          .map((item) => item.toString().trim())
-          .where((item) => item.isNotEmpty)
-          .toList();
-      return values.isEmpty ? null : values.first;
-    }
-
     final map = <String, dynamic>{};
     if (prefs['age_min'] != null) map['age_min'] = prefs['age_min'];
     if (prefs['age_max'] != null) map['age_max'] = prefs['age_max'];
-    final city = first(prefs['location']);
-    final religion = first(prefs['religion']);
-    final caste = first(prefs['caste']);
-    final profession = first(prefs['profession']);
+    final city = _firstPreferenceValue(prefs['location']);
+    final religion = _firstPreferenceValue(prefs['religion']);
+    final caste = _firstPreferenceValue(prefs['caste']);
+    final profession = _firstPreferenceValue(prefs['profession']);
     if (city != null) map['location'] = city;
     if (religion != null) map['religion'] = religion;
     if (caste != null) map['caste'] = caste;
@@ -2315,6 +2335,18 @@ class _BrowseTabState extends State<BrowseTab> {
   Future<void> _connect(String id) async {
     try {
       await widget.api.sendRequest(widget.token, id);
+      if (mounted) {
+        setState(() {
+          _matches = _matches.map((item) {
+            final map = _asMap(item);
+            if (map['id']?.toString() == id) {
+              map['requestSent'] = true;
+              map['request_sent'] = true;
+            }
+            return map;
+          }).toList();
+        });
+      }
       _toast('Connection request sent');
       await _load();
     } catch (e) {
@@ -2689,16 +2721,19 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
   late final TabController _tabs;
   bool _loading = true;
   Map<String, dynamic> _data = {};
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
     _load();
+    _refreshTimer = Timer.periodic(const Duration(seconds: 12), (_) => _load());
   }
 
   @override
   void dispose() {
+    _refreshTimer?.cancel();
     _tabs.dispose();
     super.dispose();
   }
@@ -3359,6 +3394,7 @@ class MatchProfilePage extends StatefulWidget {
 class _MatchProfilePageState extends State<MatchProfilePage> {
   bool _loading = true;
   Map<String, dynamic>? _profile;
+  bool _requestSentLocally = false;
 
   @override
   void initState() {
@@ -3385,6 +3421,14 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
     try {
       await widget.api.sendRequest(widget.token, widget.profileId);
       if (!mounted) return;
+      setState(() {
+        _requestSentLocally = true;
+        final profile = _profile ?? <String, dynamic>{};
+        profile['requestSent'] = true;
+        profile['request_sent'] = true;
+        _profile = profile;
+      });
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Connection request sent')));
     } catch (e) {
       if (!mounted) return;
@@ -3401,8 +3445,12 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
         .map((id) => id.toString())
         .toSet();
     final isConnected = p?['alreadyConnected'] == true || connectedIds.contains(widget.profileId);
+    final requestSent = _requestSentLocally || p?['requestSent'] == true || p?['request_sent'] == true;
     final isPaid = (widget.user['plan']?.toString().toLowerCase() ?? 'free') != 'free';
     final canSeeContact = isPaid && isConnected;
+    final photoVisible = (p?['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
+    final allPhotos = p == null ? <String>[] : _photoUrls(p);
+    final galleryPhotos = allPhotos.length > 1 ? allPhotos.skip(1).toList() : <String>[];
     return Scaffold(
       backgroundColor: _postLoginBackground,
       body: _loading && _profile == null
@@ -3471,6 +3519,45 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                               ],
                             ),
                           ),
+                        if (galleryPhotos.isNotEmpty)
+                          _CreamCard(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('More Photos', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A))),
+                                const SizedBox(height: 16),
+                                if (isConnected && isPaid && photoVisible)
+                                  SizedBox(
+                                    height: 94,
+                                    child: ListView.separated(
+                                      scrollDirection: Axis.horizontal,
+                                      itemCount: galleryPhotos.length,
+                                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                                      itemBuilder: (_, index) => ClipRRect(
+                                        borderRadius: BorderRadius.circular(14),
+                                        child: _SmartImage(
+                                          source: galleryPhotos[index],
+                                          width: 94,
+                                          height: 94,
+                                          fit: BoxFit.cover,
+                                          fallback: () => Container(
+                                            width: 94,
+                                            height: 94,
+                                            color: const Color(0xFFFFF0F0),
+                                            child: const Icon(Icons.person, color: _borderColor),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  )
+                                else
+                                  const VSGatedContentCard(
+                                    title: 'More photos are subscriber-only',
+                                    subtitle: 'The main profile photo is visible. Upgrade after connecting to view additional photos if the user allows it.',
+                                  ),
+                              ],
+                            ),
+                          ),
                         _CreamCard(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3492,14 +3579,14 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                         Padding(
                           padding: const EdgeInsets.all(16),
                           child: FilledButton.icon(
-                            onPressed: isConnected ? null : _connect,
+                            onPressed: (isConnected || requestSent) ? null : _connect,
                             style: FilledButton.styleFrom(
                               backgroundColor: const Color(0xFF8B0000),
                               minimumSize: const Size.fromHeight(48),
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                             ),
                             icon: const Icon(Icons.favorite, size: 20),
-                            label: Text(isConnected ? 'Already Connected' : 'Send Connection Request'),
+                            label: Text(isConnected ? 'Already Connected' : requestSent ? 'Request Sent' : 'Send Connection Request'),
                           ),
                         ),
                         const SizedBox(height: 24),
@@ -5248,6 +5335,24 @@ class SettingsPage extends StatefulWidget {
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
+}
+
+String? _firstPreferenceValue(dynamic value) {
+  if (value == null) return null;
+  if (value is List) {
+    final values = value
+        .map((item) => item.toString().trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    return values.isEmpty ? null : values.first;
+  }
+  final text = value.toString().trim();
+  if (text.isEmpty) return null;
+  if (text.contains(',')) {
+    final parts = text.split(',').map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+    return parts.isEmpty ? null : parts.first;
+  }
+  return text;
 }
 
 class _SettingsPageState extends State<SettingsPage> {
