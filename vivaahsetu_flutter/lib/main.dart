@@ -19,7 +19,7 @@ import 'core/normalization.dart' as adapter;
 
 const _baseUrl = String.fromEnvironment(
   'BACKEND_URL',
-  defaultValue: 'https://api.vivaahsetu.in',
+  defaultValue: 'https://vivaahsetu-mobile-v1.onrender.com',
 );
 const _primaryColor = VSColors.primary;
 const _secondaryColor = VSColors.secondary;
@@ -501,17 +501,38 @@ class ApiClient {
   Future<Map<String, dynamic>> matches(
     String token,
     Map<String, dynamic> filters,
-  ) async =>
-      _normalizeResponseMap(
-        Map<String, dynamic>.from(
-          await _request(
-            'GET',
-            '/matches',
-            token: token,
-            queryParameters: adapter.normalizeMatchFilters(filters),
-          ) as Map,
-        ),
-      );
+  ) async {
+    final normalizedFilters = adapter.normalizeMatchFilters(filters);
+    final firstResponse = _normalizeResponseMap(
+      Map<String, dynamic>.from(
+        await _request(
+          'GET',
+          '/matches',
+          token: token,
+          queryParameters: normalizedFilters,
+        ) as Map,
+      ),
+    );
+    final firstMatches = _asList(firstResponse['matches']);
+    final hasCustomFilters = normalizedFilters.keys.any((key) => key != 'page' && key != 'limit');
+    if (firstMatches.isNotEmpty || !hasCustomFilters) {
+      return firstResponse;
+    }
+    final fallbackResponse = _normalizeResponseMap(
+      Map<String, dynamic>.from(
+        await _request(
+          'GET',
+          '/matches',
+          token: token,
+          queryParameters: {
+            if (normalizedFilters['page'] != null) 'page': normalizedFilters['page'],
+            if (normalizedFilters['limit'] != null) 'limit': normalizedFilters['limit'],
+          },
+        ) as Map,
+      ),
+    );
+    return fallbackResponse;
+  }
 
   Future<Map<String, dynamic>> connections(String token) async =>
       _normalizeResponseMap(
@@ -584,6 +605,19 @@ class ApiClient {
       final response = await _request('GET', '/castes/${Uri.encodeComponent(religion.trim())}');
       if (response is Map) {
         return _asList(response['castes']).map((item) => item.toString()).toList();
+      }
+      return <String>[];
+    } catch (_) {
+      return <String>[];
+    }
+  }
+
+  Future<List<String>> subCastes(String caste) async {
+    if (caste.trim().isEmpty) return <String>[];
+    try {
+      final response = await _request('GET', '/subcastes/${Uri.encodeComponent(caste.trim())}');
+      if (response is Map) {
+        return _asList(response['subcastes']).map((item) => item.toString()).toList();
       }
       return <String>[];
     } catch (_) {
@@ -664,6 +698,27 @@ class ApiClient {
     return <dynamic>[];
   }
 
+  Future<List<dynamic>> setPrimaryPhoto(String token, int index) async {
+    final response = await _request('POST', '/profile/photo/$index/primary', token: token);
+    if (response is Map) {
+      return _asList(response['photos'])
+          .map((item) => _resolveMediaUrl(item?.toString()) ?? '')
+          .where((item) => item.isNotEmpty)
+          .toList();
+    }
+    return <dynamic>[];
+  }
+
+  Future<Map<String, dynamic>> settings(String token) async {
+    return Map<String, dynamic>.from(await _request('GET', '/settings', token: token) as Map);
+  }
+
+  Future<Map<String, dynamic>> updateSettings(String token, Map<String, dynamic> data) async {
+    return Map<String, dynamic>.from(
+      await _request('PUT', '/settings', token: token, data: data) as Map,
+    );
+  }
+
   Future<List<dynamic>> plans() async {
     dynamic response;
     try {
@@ -695,10 +750,7 @@ class ApiClient {
       final data = Map<String, dynamic>.from(raw);
       data['orderId'] ??= data['order_id'] ?? data['id'] ?? '';
       data['paymentSessionId'] ??= data['payment_session_id'] ?? '';
-      data['paymentLink'] ??= data['payment_link'] ??
-          (data['paymentSessionId']?.toString().isNotEmpty == true
-              ? 'https://payments.cashfree.com/order/#${data['paymentSessionId']}'
-              : '');
+      data['paymentLink'] ??= data['payment_link'] ?? '';
       data['status'] ??= data['order_status'] ?? 'pending';
       return data;
     }
@@ -3218,7 +3270,12 @@ class _ProfileTabState extends State<ProfileTab> {
                     icon: Icons.settings,
                     label: 'Settings',
                     onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+                      MaterialPageRoute<void>(
+                        builder: (_) => SettingsPage(
+                          api: widget.api,
+                          token: widget.token,
+                        ),
+                      ),
                     ),
                   ),
                   _ProfileMenuTile(
@@ -3239,15 +3296,6 @@ class _ProfileTabState extends State<ProfileTab> {
                           api: widget.api,
                           token: widget.token,
                         ),
-                      ),
-                    ),
-                  ),
-                  _ProfileMenuTile(
-                    icon: Icons.auto_stories,
-                    label: 'Success Stories',
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => SuccessStoriesPage(api: widget.api),
                       ),
                     ),
                   ),
@@ -3541,6 +3589,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String? _selectedPrefCaste;
   String? _selectedPrefProfession;
   List<String> _availableCastes = const <String>[];
+  List<String> _availableSubCastes = const <String>[];
   List<String> _availablePrefCastes = const <String>[];
   static const List<String> _genderOptions = <String>['Male', 'Female'];
 
@@ -3617,6 +3666,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
     if (_selectedPrefReligion != null && _selectedPrefReligion!.isNotEmpty) {
       unawaited(_loadCasteOptions(_selectedPrefReligion!, pref: true));
     }
+    if (_selectedCaste != null && _selectedCaste!.isNotEmpty) {
+      unawaited(_loadSubCasteOptions(_selectedCaste!));
+    }
   }
 
   @override
@@ -3669,6 +3721,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           _prefCaste.clear();
         } else {
           _availableCastes = const <String>[];
+          _availableSubCastes = const <String>[];
           _selectedCaste = null;
           _selectedSubCaste = null;
           _caste.clear();
@@ -3687,6 +3740,28 @@ class _EditProfilePageState extends State<EditProfilePage> {
         _availableCastes = merged;
       }
     });
+  }
+
+  Future<void> _loadSubCasteOptions(String caste) async {
+    if (caste.trim().isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _availableSubCastes = const <String>[];
+        _selectedSubCaste = null;
+        _subCaste.clear();
+      });
+      return;
+    }
+    final remoteSubCastes = await widget.api.subCastes(caste);
+    final merged = _mergeDropdownOptions(
+      <String>[
+        ..._subCasteChoices(caste, null),
+        ...remoteSubCastes,
+      ],
+      _selectedSubCaste,
+    );
+    if (!mounted) return;
+    setState(() => _availableSubCastes = merged);
   }
 
   Future<void> _save() async {
@@ -3827,6 +3902,30 @@ class _EditProfilePageState extends State<EditProfilePage> {
     }
   }
 
+  Future<void> _setPrimaryPhoto(int index) async {
+    if (index < 0 || index >= _photos.length) return;
+    setState(() => _uploadingPhoto = true);
+    try {
+      final photos = await widget.api.setPrimaryPhoto(widget.token, index);
+      final refreshedProfile = await widget.api.me(widget.token);
+      if (!mounted) return;
+      setState(() => _photos = photos.cast<String>());
+      if (widget.onProfileSaved != null) {
+        await widget.onProfileSaved!(refreshedProfile);
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Profile photo updated')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -3862,12 +3961,17 @@ class _EditProfilePageState extends State<EditProfilePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Profile Photos', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000))),
+                const SizedBox(height: 6),
+                Text(
+                  '${_photos.length}/5 uploaded. Choose one as your profile photo.',
+                  style: const TextStyle(fontSize: 12, color: _textSecondaryColor),
+                ),
                 const SizedBox(height: 16),
                 SizedBox(
                   height: 92,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
-                    itemCount: _photos.length + 1,
+                    itemCount: _photos.length >= 5 ? _photos.length : _photos.length + 1,
                     separatorBuilder: (_, __) => const SizedBox(width: 12),
                     itemBuilder: (_, index) {
                       if (index == _photos.length) {
@@ -3907,6 +4011,41 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                 height: 92,
                                 color: const Color(0xFFFFF0F0),
                                 child: const Icon(Icons.person, color: _borderColor),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            top: 4,
+                            left: 4,
+                            child: InkWell(
+                              onTap: _uploadingPhoto ? null : () => _setPrimaryPhoto(index),
+                              child: Container(
+                                width: 24,
+                                height: 24,
+                                decoration: BoxDecoration(
+                                  color: index == 0 ? const Color(0xFF8B0000) : Colors.black.withValues(alpha: 0.55),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  index == 0 ? Icons.star : Icons.star_border,
+                                  size: 16,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            left: 4,
+                            bottom: 4,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.62),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                index == 0 ? 'Profile Photo' : 'Photo ${index + 1}',
+                                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w600),
                               ),
                             ),
                           ),
@@ -4013,6 +4152,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       _religion.text = value ?? '';
                       _selectedCaste = null;
                       _selectedSubCaste = null;
+                      _availableSubCastes = const <String>[];
                       _caste.clear();
                       _subCaste.clear();
                     });
@@ -4030,15 +4170,23 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       _selectedCaste = value;
                       _caste.text = value ?? '';
                       _selectedSubCaste = null;
+                      _availableSubCastes = const <String>[];
                       _subCaste.clear();
                     });
+                    unawaited(_loadSubCasteOptions(value ?? ''));
                   },
                 ),
                 const SizedBox(height: 16),
                 _DropdownField(
                   label: 'Sub Caste',
                   value: _selectedSubCaste,
-                  options: _subCasteChoices(_selectedCaste, _selectedSubCaste),
+                  options: _mergeDropdownOptions(
+                    <String>[
+                      ..._subCasteChoices(_selectedCaste, null),
+                      ..._availableSubCastes,
+                    ],
+                    _selectedSubCaste,
+                  ),
                   hint: _selectedCaste == null ? 'Select caste first' : 'Select sub caste',
                   onChanged: (value) {
                     setState(() {
@@ -5093,7 +5241,10 @@ class _ChatPageState extends State<ChatPage> {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, required this.api, required this.token});
+
+  final ApiClient api;
+  final String token;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -5115,13 +5266,17 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    Map<String, dynamic> remote = <String, dynamic>{};
+    try {
+      remote = await widget.api.settings(widget.token);
+    } catch (_) {}
     if (!mounted) return;
     setState(() {
-      _pushNotifications = prefs.getBool('settings_push_notifications') ?? true;
-      _emailNotifications = prefs.getBool('settings_email_notifications') ?? true;
-      _profileVisible = prefs.getBool('settings_profile_visible') ?? true;
-      _showLastSeen = prefs.getBool('settings_show_last_seen') ?? true;
-      _typingIndicators = prefs.getBool('settings_typing_indicators') ?? true;
+      _pushNotifications = (remote['pushNotifications'] as bool?) ?? prefs.getBool('settings_push_notifications') ?? true;
+      _emailNotifications = (remote['emailNotifications'] as bool?) ?? prefs.getBool('settings_email_notifications') ?? true;
+      _profileVisible = (remote['profileVisible'] as bool?) ?? prefs.getBool('settings_profile_visible') ?? true;
+      _showLastSeen = (remote['showLastSeen'] as bool?) ?? prefs.getBool('settings_show_last_seen') ?? true;
+      _typingIndicators = (remote['typingIndicators'] as bool?) ?? prefs.getBool('settings_typing_indicators') ?? true;
       _loading = false;
     });
   }
@@ -5129,6 +5284,23 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _save(String key, bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(key, value);
+  }
+
+  Future<void> _saveRemote() async {
+    try {
+      await widget.api.updateSettings(widget.token, {
+        'pushNotifications': _pushNotifications,
+        'emailNotifications': _emailNotifications,
+        'profileVisible': _profileVisible,
+        'showLastSeen': _showLastSeen,
+        'typingIndicators': _typingIndicators,
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
   }
 
   @override
@@ -5150,6 +5322,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (value) {
                     setState(() => _pushNotifications = value);
                     unawaited(_save('settings_push_notifications', value));
+                    unawaited(_saveRemote());
                   },
                 ),
                 _SwitchSettingsTile(
@@ -5160,6 +5333,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (value) {
                     setState(() => _emailNotifications = value);
                     unawaited(_save('settings_email_notifications', value));
+                    unawaited(_saveRemote());
                   },
                 ),
                 const SizedBox(height: 16),
@@ -5172,6 +5346,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (value) {
                     setState(() => _profileVisible = value);
                     unawaited(_save('settings_profile_visible', value));
+                    unawaited(_saveRemote());
                   },
                 ),
                 _SwitchSettingsTile(
@@ -5182,6 +5357,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (value) {
                     setState(() => _showLastSeen = value);
                     unawaited(_save('settings_show_last_seen', value));
+                    unawaited(_saveRemote());
                   },
                 ),
                 _SwitchSettingsTile(
@@ -5192,12 +5368,25 @@ class _SettingsPageState extends State<SettingsPage> {
                   onChanged: (value) {
                     setState(() => _typingIndicators = value);
                     unawaited(_save('settings_typing_indicators', value));
+                    unawaited(_saveRemote());
                   },
                 ),
                 const SizedBox(height: 16),
                 const _SettingsHeader('Info'),
-                const _SettingsTile(icon: Icons.shield, label: 'Security & Safety Tips'),
-                const _SettingsTile(icon: Icons.description, label: 'Terms & Privacy'),
+                _SettingsTile(
+                  icon: Icons.shield,
+                  label: 'Security & Safety Tips',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const SecuritySafetyPage()),
+                  ),
+                ),
+                _SettingsTile(
+                  icon: Icons.description,
+                  label: 'Terms & Privacy',
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(builder: (_) => const TermsPrivacyPage()),
+                  ),
+                ),
                 const _SettingsTile(icon: Icons.info_outline, label: 'App Version 1.0.0'),
               ],
             ),
@@ -5517,6 +5706,86 @@ class AboutPage extends StatelessWidget {
                 Text('A serious-intent matrimonial platform focused on meaningful matches, limited active connections, and authentic profiles.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
                 SizedBox(height: 14),
                 Text('Version: 1.0.0', style: TextStyle(fontSize: 13, color: _textSecondaryColor)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class SecuritySafetyPage extends StatelessWidget {
+  const SecuritySafetyPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _postLoginBackground,
+      appBar: AppBar(title: const Text('Security & Safety Tips')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _CreamCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Meet Safely', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                SizedBox(height: 10),
+                Text('Verify profile details through calls and family introductions before making commitments.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                SizedBox(height: 8),
+                Text('Prefer public places for first meetings and share plans with a trusted person.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+              ],
+            ),
+          ),
+          _CreamCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Protect Your Data', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                SizedBox(height: 10),
+                Text('Never share OTPs, bank details, passwords, or sensitive identity documents in chat.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                SizedBox(height: 8),
+                Text('Report suspicious payment requests or mismatched identity claims immediately.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class TermsPrivacyPage extends StatelessWidget {
+  const TermsPrivacyPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _postLoginBackground,
+      appBar: AppBar(title: const Text('Terms & Privacy')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _CreamCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Terms of Use', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                SizedBox(height: 10),
+                Text('Use VivaahSetu only for genuine matrimonial purposes. Fake profiles, harassment, scraping, and misuse are prohibited.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+              ],
+            ),
+          ),
+          _CreamCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Privacy Notice', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                SizedBox(height: 10),
+                Text('Your profile, communication preferences, and account activity are used to deliver matches, notifications, and safety features.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                SizedBox(height: 8),
+                Text('Profile visibility and chat-status controls can be changed anytime from Settings.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
               ],
             ),
           ),
@@ -6191,10 +6460,11 @@ class _SettingsHeader extends StatelessWidget {
 }
 
 class _SettingsTile extends StatelessWidget {
-  const _SettingsTile({required this.icon, required this.label});
+  const _SettingsTile({required this.icon, required this.label, this.onTap});
 
   final IconData icon;
   final String label;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -6205,6 +6475,7 @@ class _SettingsTile extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: ListTile(
+        onTap: onTap,
         leading: Icon(icon, color: _textColor),
         title: Text(label, style: const TextStyle(fontSize: 16, color: _textColor, fontWeight: FontWeight.w500)),
         trailing: const Icon(Icons.chevron_right, color: _textSecondaryColor),

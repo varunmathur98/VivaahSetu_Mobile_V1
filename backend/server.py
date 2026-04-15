@@ -61,6 +61,76 @@ CONNECTION_DURATION_DAYS = 15
 MAX_PHOTOS = 5
 DISCOUNT_PERCENT = 70
 
+CASTES_BY_RELIGION = {
+    "Hindu": [
+        "Brahmin", "Kshatriya", "Vaishya", "Kayastha", "Bhumihar", "Rajput", "Jat",
+        "Yadav", "Agarwal", "Gupta", "Patel", "Reddy", "Kamma", "Kapu", "Maratha",
+        "Nair", "Ezhava", "Chettiar", "Mudaliar", "Vanniyar", "Other",
+    ],
+    "Muslim": ["Sunni", "Shia", "Syed", "Pathan", "Sheikh", "Mughal", "Bohra", "Other"],
+    "Christian": ["Catholic", "Protestant", "Orthodox", "Pentecostal", "CSI", "CNI", "Other"],
+    "Sikh": ["Jat Sikh", "Khatri", "Arora", "Ramgarhia", "Saini", "Other"],
+    "Jain": ["Digambar", "Shwetambar", "Oswal", "Porwal", "Other"],
+    "Buddhist": ["Mahayana", "Theravada", "Navayana", "Other"],
+}
+
+SUBCASTES_BY_CASTE = {
+    "Brahmin": ["Iyer", "Iyengar", "Saraswat", "Gaur", "Kanyakubja", "Deshastha", "Smartha", "Maithil", "Other"],
+    "Kshatriya": ["Rajput", "Thakur", "Nair", "Reddy", "Maratha", "Other"],
+    "Vaishya": ["Agarwal", "Gupta", "Maheshwari", "Oswal", "Bania", "Other"],
+    "Kayastha": ["Srivastava", "Saxena", "Mathur", "Nigam", "Asthana", "Other"],
+    "Bhumihar": ["Babhhan", "Other"],
+    "Rajput": ["Chauhan", "Rathore", "Sisodiya", "Parmar", "Solanki", "Tomar", "Other"],
+    "Jat": ["Dahiya", "Malik", "Hooda", "Sehrawat", "Ahlawat", "Jakhar", "Other"],
+    "Yadav": ["Ahir", "Gwala", "Krishnaut", "Nandvanshi", "Other"],
+    "Agarwal": ["Bisa", "Dassa", "Goyal", "Mittal", "Jindal", "Other"],
+    "Gupta": ["Bania", "Agarwal", "Mahajan", "Khandelwal", "Other"],
+    "Patel": ["Leuva", "Kadva", "Anjana", "Patidar", "Other"],
+    "Reddy": ["Panta Reddy", "Motati", "Kapu Reddy", "Other"],
+    "Kamma": ["Chowdary", "Naidu", "Other"],
+    "Kapu": ["Balija", "Telaga", "Ontari", "Munnuru", "Other"],
+    "Maratha": ["96 Kuli", "Kunbi", "CKP", "Deshastha", "Other"],
+    "Nair": ["Menon", "Pillai", "Kurup", "Panicker", "Other"],
+    "Ezhava": ["Thiyya", "Other"],
+    "Chettiar": ["Nagarathar", "Vaniar", "Other"],
+    "Mudaliar": ["Thuluva Vellala", "Agamudayar", "Sengunthar", "Other"],
+    "Vanniyar": ["Padayachi", "Gounder", "Other"],
+    "Sunni": ["Hanafi", "Shafi", "Maliki", "Hanbali", "Other"],
+    "Shia": ["Ithna Ashari", "Ismaili", "Bohra", "Other"],
+    "Syed": ["Hasani", "Hussaini", "Other"],
+    "Pathan": ["Yousafzai", "Afridi", "Other"],
+    "Sheikh": ["Qureshi", "Ansari", "Siddiqui", "Other"],
+    "Mughal": ["Mirza", "Baig", "Other"],
+    "Bohra": ["Dawoodi Bohra", "Sulaymani", "Other"],
+    "Catholic": ["Roman Catholic", "Syro-Malabar", "Syro-Malankara", "Other"],
+    "Protestant": ["CSI", "CNI", "Pentecostal", "Other"],
+    "Orthodox": ["Malankara", "Jacobite", "Other"],
+    "Pentecostal": ["Assemblies of God", "Independent", "Other"],
+    "CSI": ["South India", "Other"],
+    "CNI": ["North India", "Other"],
+    "Jat Sikh": ["Sandhu", "Gill", "Brar", "Sidhu", "Other"],
+    "Khatri": ["Kapoor", "Khanna", "Malhotra", "Mehra", "Other"],
+    "Arora": ["Sachdeva", "Taneja", "Ahuja", "Chopra", "Other"],
+    "Ramgarhia": ["Mistry", "Lohar", "Tarkhan", "Other"],
+    "Saini": ["Other"],
+    "Digambar": ["Bisapanthi", "Terapanthi", "Taranpanthi", "Other"],
+    "Shwetambar": ["Murtipujak", "Sthanakvasi", "Terapanthi", "Other"],
+    "Oswal": ["Other"],
+    "Porwal": ["Other"],
+    "Mahayana": ["Navayana", "Other"],
+    "Theravada": ["Other"],
+    "Navayana": ["Other"],
+}
+
+def default_user_settings() -> Dict[str, Any]:
+    return {
+        "pushNotifications": True,
+        "emailNotifications": True,
+        "profileVisible": True,
+        "showLastSeen": True,
+        "typingIndicators": True,
+    }
+
 # Create the main app
 app = FastAPI(title="VivahSetu API")
 api_router = APIRouter(prefix="/api")
@@ -228,6 +298,14 @@ def serialize_user(user: dict) -> dict:
         u.setdefault("profilePhoto", preferred_photo)
     if photos:
         u["photos"] = photos
+    settings = default_user_settings()
+    settings.update(u.get("settings", {}) if isinstance(u.get("settings"), dict) else {})
+    u["settings"] = settings
+    u.setdefault("pushNotifications", settings["pushNotifications"])
+    u.setdefault("emailNotifications", settings["emailNotifications"])
+    u.setdefault("profileVisible", settings["profileVisible"])
+    u.setdefault("showLastSeen", settings["showLastSeen"])
+    u.setdefault("typingIndicators", settings["typingIndicators"])
     return u
 
 def gender_regex(value: str) -> Dict[str, str]:
@@ -312,6 +390,7 @@ async def register(input: RegisterInput):
         "blockedUsers": [],
         "profileVisitors": [],
         "notifications": [],
+        "settings": default_user_settings(),
         "createdAt": now,
         "updatedAt": now,
     }
@@ -405,6 +484,7 @@ async def google_login(login_data: GoogleLoginRequest):
                 "blockedUsers": [],
                 "profileVisitors": [],
                 "notifications": [],
+                "settings": default_user_settings(),
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -487,6 +567,7 @@ async def firebase_session(payload: FirebaseSessionInput):
                 "blockedUsers": [],
                 "profileVisitors": [],
                 "notifications": [],
+                "settings": default_user_settings(),
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -555,6 +636,24 @@ async def update_profile(data: ProfileUpdateInput, current_user: dict = Depends(
     updated = await db.users.find_one({"_id": current_user["_id"]})
     return serialize_user(updated)
 
+@api_router.get("/settings")
+async def get_settings(current_user: dict = Depends(get_current_user)):
+    settings = default_user_settings()
+    settings.update(current_user.get("settings", {}) if isinstance(current_user.get("settings"), dict) else {})
+    return {"settings": settings, **settings}
+
+@api_router.put("/settings")
+async def update_settings(data: SettingsInput, current_user: dict = Depends(get_current_user)):
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
+    settings = default_user_settings()
+    settings.update(current_user.get("settings", {}) if isinstance(current_user.get("settings"), dict) else {})
+    settings.update(update)
+    await db.users.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {"settings": settings, "updatedAt": datetime.now(timezone.utc)}},
+    )
+    return {"settings": settings, **settings}
+
 @api_router.put("/profile")
 async def update_profile_v2(data: ProfileUpdateInput, current_user: dict = Depends(get_current_user)):
     updated = await update_profile(data, current_user)
@@ -593,6 +692,19 @@ async def upload_photo(
         {"$set": {"photos": photos, "photoUrl": primary_photo, "profile_photo": primary_photo, "updatedAt": datetime.now(timezone.utc)}}
     )
     return {"photos": photos}
+
+@api_router.post("/profile/photo/{index}/primary")
+async def set_primary_photo(index: int, current_user: dict = Depends(get_current_user)):
+    photos = current_user.get("photos", []) or []
+    if index < 0 or index >= len(photos):
+        raise HTTPException(status_code=400, detail="Invalid photo index")
+    selected = photos[index]
+    ordered = [selected, *[photo for i, photo in enumerate(photos) if i != index]]
+    await db.users.update_one(
+        {"_id": current_user["_id"]},
+        {"$set": {"photos": ordered, "photoUrl": selected, "profile_photo": selected, "updatedAt": datetime.now(timezone.utc)}}
+    )
+    return {"photos": ordered, "photoUrl": selected, "profile_photo": selected}
 
 @api_router.delete("/profile/photo/{index}")
 async def delete_photo(index: int, current_user: dict = Depends(get_current_user)):
@@ -651,7 +763,17 @@ async def get_matches(
     received = current_user.get("connectionRequestsReceived", [])
 
     def base_query() -> Dict[str, Any]:
-        query: Dict[str, Any] = {"_id": {"$ne": current_user["_id"]}}
+        query: Dict[str, Any] = {
+            "_id": {"$ne": current_user["_id"]},
+            "$and": [
+                {
+                    "$or": [
+                        {"settings.profileVisible": {"$exists": False}},
+                        {"settings.profileVisible": True},
+                    ]
+                }
+            ],
+        }
         if exclude_ids:
             query["_id"]["$nin"] = exclude_ids
         if gender:
@@ -712,7 +834,17 @@ async def get_matches(
             users = await db.users.find(attempt, {"password_hash": 0}).skip(skip).limit(limit).to_list(limit)
             break
     if not users and total == 0:
-        relaxed = {"_id": {"$ne": current_user["_id"]}}
+        relaxed = {
+            "_id": {"$ne": current_user["_id"]},
+            "$and": [
+                {
+                    "$or": [
+                        {"settings.profileVisible": {"$exists": False}},
+                        {"settings.profileVisible": True},
+                    ]
+                }
+            ],
+        }
         if exclude_ids:
             relaxed["_id"]["$nin"] = exclude_ids
         total = await db.users.count_documents(relaxed)
@@ -1019,6 +1151,13 @@ class CheckoutRequest(BaseModel):
     planId: str
     returnUrl: Optional[str] = None
 
+class SettingsInput(BaseModel):
+    pushNotifications: Optional[bool] = None
+    emailNotifications: Optional[bool] = None
+    profileVisible: Optional[bool] = None
+    showLastSeen: Optional[bool] = None
+    typingIndicators: Optional[bool] = None
+
 def get_cashfree_headers():
     return {
         "x-client-id": CASHFREE_APP_ID,
@@ -1076,7 +1215,6 @@ async def create_payment_order(req: CheckoutRequest, current_user: dict = Depend
     payment_session_id = cf_data.get("payment_session_id") or ""
     payment_link = (
         cf_data.get("payment_link")
-        or (f"https://payments.cashfree.com/order/#{payment_session_id}" if payment_session_id else "")
         or ""
     )
     payment_link_id = ""
@@ -1133,7 +1271,8 @@ async def create_payment_order(req: CheckoutRequest, current_user: dict = Depend
         "createdAt": datetime.now(timezone.utc).isoformat(),
     }
     await db.payment_transactions.insert_one(tx)
-    payment_link = payment_link or f"https://payments.cashfree.com/order/#/{order_id}"
+    if not payment_link:
+        raise HTTPException(status_code=500, detail="Unable to create hosted payment link")
 
     return {
         "orderId": order_id,
@@ -1283,15 +1422,19 @@ async def get_success_stories():
 
 @api_router.get("/castes/{religion}")
 async def get_castes(religion: str):
-    CASTES = {
-        "Hindu": ["Brahmin", "Kshatriya", "Vaishya", "Patel", "Reddy", "Nair", "Yadav", "Jat", "Rajput", "Maratha", "Gupta", "Agarwal", "Other"],
-        "Muslim": ["Sunni", "Shia", "Other"],
-        "Christian": ["Catholic", "Protestant", "Orthodox", "Other"],
-        "Sikh": ["Jat Sikh", "Khatri", "Arora", "Ramgarhia", "Other"],
-        "Jain": ["Digambar", "Shwetambar", "Other"],
-        "Buddhist": ["Mahayana", "Theravada", "Other"],
-    }
-    return {"castes": CASTES.get(religion, [])}
+    return {"castes": CASTES_BY_RELIGION.get(religion, [])}
+
+@api_router.get("/subcastes/{caste}")
+async def get_subcastes(caste: str):
+    if not caste:
+        return {"subcastes": []}
+    if caste in SUBCASTES_BY_CASTE:
+        return {"subcastes": SUBCASTES_BY_CASTE[caste]}
+    lowered = caste.strip().lower()
+    for key, value in SUBCASTES_BY_CASTE.items():
+        if key.lower() == lowered:
+            return {"subcastes": value}
+    return {"subcastes": ["Other"]}
 
 # ============ HEALTH ============
 
