@@ -221,7 +221,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         user_id: str = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token")
-        user = await db.users.find_one({"_id": ObjectId(user_id)})
+        user = await find_user_by_ref(user_id)
         if user is None:
             raise HTTPException(status_code=401, detail="User not found")
         user["id"] = str(user["_id"])
@@ -310,6 +310,42 @@ def serialize_user(user: dict) -> dict:
 
 def gender_regex(value: str) -> Dict[str, str]:
     return {"$regex": rf"^\s*{value}\s*$", "$options": "i"}
+
+def normalize_ref(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        raw = value.get("id") or value.get("_id") or ""
+        return str(raw).strip()
+    return str(value).strip()
+
+def normalize_ref_list(values: Any) -> List[str]:
+    items = values if isinstance(values, list) else []
+    normalized: List[str] = []
+    for item in items:
+        ref = normalize_ref(item)
+        if ref:
+            normalized.append(ref)
+    return normalized
+
+async def find_user_by_ref(value: Any, projection: Optional[Dict[str, int]] = None) -> Optional[dict]:
+    ref = normalize_ref(value)
+    if not ref:
+        return None
+    queries: List[Dict[str, Any]] = [{"id": ref}, {"_id": ref}]
+    if ObjectId.is_valid(ref):
+        queries.insert(0, {"_id": ObjectId(ref)})
+    return await db.users.find_one({"$or": queries}, projection)
+
+def visible_profile_or_conditions() -> List[Dict[str, Any]]:
+    return [
+        {"settings.profileVisible": {"$exists": False}},
+        {"settings.profileVisible": True},
+        {"profileVisible": {"$exists": False}},
+        {"profileVisible": True},
+        {"profileVisibility": {"$exists": False}},
+        {"profileVisibility": {"$regex": r"^(public|visible|yes|all)$", "$options": "i"}},
+    ]
 
 def merge_auth_provider(existing_provider: Optional[str], new_provider: str) -> str:
     providers = {
@@ -721,16 +757,14 @@ async def delete_photo(index: int, current_user: dict = Depends(get_current_user
 
 @api_router.get("/profile/{user_id}")
 async def get_user_profile(user_id: str, current_user: dict = Depends(get_current_user)):
-    try:
-        target = await db.users.find_one({"_id": ObjectId(user_id)})
-    except Exception:
-        raise HTTPException(status_code=404, detail="User not found")
+    target = await find_user_by_ref(user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     # Track profile visit
-    if str(current_user["_id"]) != user_id:
+    target_ref = str(target["_id"])
+    if str(current_user["_id"]) != target_ref:
         await db.users.update_one(
-            {"_id": ObjectId(user_id)},
+            {"_id": target["_id"]},
             {"$addToSet": {"profileVisitors": {
                 "visitorId": str(current_user["_id"]),
                 "visitedAt": datetime.now(timezone.utc).isoformat()
@@ -752,147 +786,150 @@ async def get_matches(
     occupation: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    min_age = age_min if age_min is not None else minAge
-    max_age = age_max if age_max is not None else maxAge
-    city_or_location = (location or city or "").strip()
-    user_gender = (current_user.get("gender") or "").strip().lower()
-    blocked = current_user.get("blockedUsers", [])
-    exclude_ids = [ObjectId(uid) for uid in set(blocked) if ObjectId.is_valid(uid)]
-    connected = current_user.get("connections", [])
-    sent = current_user.get("connectionRequestsSent", [])
-    received = current_user.get("connectionRequestsReceived", [])
+    try:
+        min_age = age_min if age_min is not None else minAge
+        max_age = age_max if age_max is not None else maxAge
+        city_or_location = (location or city or "").strip()
+        user_gender = (current_user.get("gender") or "").strip().lower()
+        blocked = normalize_ref_list(current_user.get("blockedUsers", []))
+        exclude_ids = [ObjectId(uid) for uid in set(blocked) if ObjectId.is_valid(uid)]
+        connected = normalize_ref_list(current_user.get("connections", []))
+        sent = normalize_ref_list(current_user.get("connectionRequestsSent", []))
+        received = normalize_ref_list(current_user.get("connectionRequestsReceived", []))
 
-    def base_query() -> Dict[str, Any]:
-        query: Dict[str, Any] = {
-            "_id": {"$ne": current_user["_id"]},
-            "$and": [
-                {
-                    "$or": [
-                        {"settings.profileVisible": {"$exists": False}},
-                        {"settings.profileVisible": True},
-                    ]
-                }
-            ],
-        }
-        if exclude_ids:
-            query["_id"]["$nin"] = exclude_ids
-        if gender:
-            query["gender"] = gender_regex(gender.strip())
-        elif user_gender == "male":
-            query["gender"] = gender_regex("female")
-        elif user_gender == "female":
-            query["gender"] = gender_regex("male")
-        return query
+        def base_query() -> Dict[str, Any]:
+            query: Dict[str, Any] = {
+                "_id": {"$ne": current_user["_id"]},
+                "$and": [
+                    {
+                        "$or": visible_profile_or_conditions()
+                    }
+                ],
+            }
+            if exclude_ids:
+                query["_id"]["$nin"] = exclude_ids
+            if gender:
+                query["gender"] = gender_regex(gender.strip())
+            elif user_gender == "male":
+                query["gender"] = gender_regex("female")
+            elif user_gender == "female":
+                query["gender"] = gender_regex("male")
+            return query
 
-    def apply_filters(query: Dict[str, Any], *, include_age: bool, include_location: bool, include_religion: bool, include_caste: bool, include_profession: bool) -> Dict[str, Any]:
-        if include_age and (min_age is not None or max_age is not None):
-            age_q: Dict[str, Any] = {}
-            if min_age is not None:
-                age_q["$gte"] = min_age
-            if max_age is not None:
-                age_q["$lte"] = max_age
-            query["age"] = age_q
-        if include_religion and religion:
-            query["religion"] = {"$regex": religion, "$options": "i"}
-        if include_caste and caste:
-            query["caste"] = {"$regex": caste, "$options": "i"}
-        if include_location and city_or_location:
-            query["$or"] = [
-                {"city": {"$regex": city_or_location, "$options": "i"}},
-                {"location": {"$regex": city_or_location, "$options": "i"}},
-                {"state": {"$regex": city_or_location, "$options": "i"}},
-            ]
-        profession_or_occupation = (profession or occupation or "").strip()
-        if include_profession and profession_or_occupation:
-            query["$and"] = query.get("$and", [])
-            query["$and"].append(
-                {
-                    "$or": [
-                        {"occupation": {"$regex": profession_or_occupation, "$options": "i"}},
-                        {"profession": {"$regex": profession_or_occupation, "$options": "i"}},
-                    ]
-                }
-            )
-        return query
+        def apply_filters(query: Dict[str, Any], *, include_age: bool, include_location: bool, include_religion: bool, include_caste: bool, include_profession: bool) -> Dict[str, Any]:
+            if include_age and (min_age is not None or max_age is not None):
+                age_q: Dict[str, Any] = {}
+                if min_age is not None:
+                    age_q["$gte"] = min_age
+                if max_age is not None:
+                    age_q["$lte"] = max_age
+                query["age"] = age_q
+            if include_religion and religion:
+                query["religion"] = {"$regex": religion, "$options": "i"}
+            if include_caste and caste:
+                query["caste"] = {"$regex": caste, "$options": "i"}
+            if include_location and city_or_location:
+                query["$and"] = query.get("$and", [])
+                query["$and"].append(
+                    {"$or": [
+                        {"city": {"$regex": city_or_location, "$options": "i"}},
+                        {"location": {"$regex": city_or_location, "$options": "i"}},
+                        {"state": {"$regex": city_or_location, "$options": "i"}},
+                    ]}
+                )
+            profession_or_occupation = (profession or occupation or "").strip()
+            if include_profession and profession_or_occupation:
+                query["$and"] = query.get("$and", [])
+                query["$and"].append(
+                    {
+                        "$or": [
+                            {"occupation": {"$regex": profession_or_occupation, "$options": "i"}},
+                            {"profession": {"$regex": profession_or_occupation, "$options": "i"}},
+                        ]
+                    }
+                )
+            return query
 
-    query_attempts = [
-        apply_filters(base_query(), include_age=True, include_location=True, include_religion=True, include_caste=True, include_profession=True),
-        apply_filters(base_query(), include_age=True, include_location=False, include_religion=True, include_caste=True, include_profession=True),
-        apply_filters(base_query(), include_age=True, include_location=False, include_religion=False, include_caste=False, include_profession=False),
-        apply_filters(base_query(), include_age=False, include_location=False, include_religion=False, include_caste=False, include_profession=False),
-    ]
+        query_attempts = [
+            apply_filters(base_query(), include_age=True, include_location=True, include_religion=True, include_caste=True, include_profession=True),
+            apply_filters(base_query(), include_age=True, include_location=False, include_religion=True, include_caste=True, include_profession=True),
+            apply_filters(base_query(), include_age=True, include_location=False, include_religion=False, include_caste=False, include_profession=False),
+            apply_filters(base_query(), include_age=False, include_location=False, include_religion=False, include_caste=False, include_profession=False),
+        ]
 
-    query = query_attempts[0]
-    users = []
-    total = 0
-    skip = (page - 1) * limit
-    for attempt in query_attempts:
-        attempt_total = await db.users.count_documents(attempt)
-        if attempt_total > 0:
-            query = attempt
-            total = attempt_total
-            users = await db.users.find(attempt, {"password_hash": 0}).skip(skip).limit(limit).to_list(limit)
-            break
-    if not users and total == 0:
-        relaxed = {
-            "_id": {"$ne": current_user["_id"]},
-            "$and": [
-                {
-                    "$or": [
-                        {"settings.profileVisible": {"$exists": False}},
-                        {"settings.profileVisible": True},
-                    ]
-                }
-            ],
-        }
-        if exclude_ids:
-            relaxed["_id"]["$nin"] = exclude_ids
-        total = await db.users.count_documents(relaxed)
-        if total > 0:
-            query = relaxed
-            users = await db.users.find(relaxed, {"password_hash": 0}).skip(skip).limit(limit).to_list(limit)
-    if not users and total == 0:
+        query = query_attempts[0]
         users = []
+        total = 0
+        skip = (page - 1) * limit
+        for attempt in query_attempts:
+            attempt_total = await db.users.count_documents(attempt)
+            if attempt_total > 0:
+                query = attempt
+                total = attempt_total
+                users = await db.users.find(attempt, {"password_hash": 0}).skip(skip).limit(limit).to_list(limit)
+                break
+        if not users and total == 0:
+            relaxed = {
+                "_id": {"$ne": current_user["_id"]},
+                "$and": [
+                    {"$or": visible_profile_or_conditions()}
+                ],
+            }
+            if exclude_ids:
+                relaxed["_id"]["$nin"] = exclude_ids
+            total = await db.users.count_documents(relaxed)
+            if total > 0:
+                query = relaxed
+                users = await db.users.find(relaxed, {"password_hash": 0}).skip(skip).limit(limit).to_list(limit)
+        if not users and total == 0:
+            users = []
 
-    matches = []
-    for u in users:
-        su = serialize_user(u)
-        su["alreadyConnected"] = su.get("id", "") in connected
-        su["requestSent"] = su.get("id", "") in sent
-        su["requestReceived"] = su.get("id", "") in received
-        su["already_connected"] = su["alreadyConnected"]
-        su["request_sent"] = su["requestSent"]
-        su["request_received"] = su["requestReceived"]
-        matches.append(su)
+        matches = []
+        for u in users:
+            su = serialize_user(u)
+            profile_id = normalize_ref(su.get("id"))
+            su["alreadyConnected"] = profile_id in connected
+            su["requestSent"] = profile_id in sent
+            su["requestReceived"] = profile_id in received
+            su["already_connected"] = su["alreadyConnected"]
+            su["request_sent"] = su["requestSent"]
+            su["request_received"] = su["requestReceived"]
+            matches.append(su)
 
-    return {"matches": matches, "total": total, "page": page, "pages": (total + limit - 1) // limit if total else 0}
+        return {"matches": matches, "total": total, "page": page, "pages": (total + limit - 1) // limit if total else 0}
+    except Exception as e:
+        logger.exception("Matches query failed")
+        return {"matches": [], "total": 0, "page": page, "pages": 0, "error": str(e)}
 
 # ============ CONNECTIONS ROUTES ============
 
 @api_router.post("/connections/request/{target_id}")
 async def send_connection_request(target_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
-    if user_id == target_id:
+    user_id = normalize_ref(current_user["_id"])
+    target_ref = normalize_ref(target_id)
+    if user_id == target_ref:
         raise HTTPException(status_code=400, detail="Cannot connect with yourself")
 
-    connections = current_user.get("connections", [])
-    if target_id in connections:
+    connections = normalize_ref_list(current_user.get("connections", []))
+    if target_ref in connections:
         raise HTTPException(status_code=400, detail="Already connected")
 
-    sent = current_user.get("connectionRequestsSent", [])
-    if target_id in sent:
+    sent = normalize_ref_list(current_user.get("connectionRequestsSent", []))
+    if target_ref in sent:
         raise HTTPException(status_code=400, detail="Request already sent")
 
     active_count = len(connections)
     if active_count >= MAX_CONNECTIONS:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_CONNECTIONS} connections reached")
 
-    target = await db.users.find_one({"_id": ObjectId(target_id)})
+    target = await find_user_by_ref(target_ref)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
 
-    await db.users.update_one({"_id": current_user["_id"]}, {"$addToSet": {"connectionRequestsSent": target_id}})
-    await db.users.update_one({"_id": ObjectId(target_id)}, {"$addToSet": {"connectionRequestsReceived": user_id}})
+    target_db_id = target["_id"]
+    target_ref = normalize_ref(target_db_id)
+    await db.users.update_one({"_id": current_user["_id"]}, {"$addToSet": {"connectionRequestsSent": target_ref}})
+    await db.users.update_one({"_id": target_db_id}, {"$addToSet": {"connectionRequestsReceived": user_id}})
 
     notification = {
         "id": str(uuid.uuid4()),
@@ -903,17 +940,18 @@ async def send_connection_request(target_id: str, current_user: dict = Depends(g
         "read": False,
         "createdAt": datetime.now(timezone.utc).isoformat()
     }
-    await db.users.update_one({"_id": ObjectId(target_id)}, {"$push": {"notifications": notification}})
+    await db.users.update_one({"_id": target_db_id}, {"$push": {"notifications": notification}})
     return {"message": "Connection request sent"}
 
 @api_router.post("/connections/accept/{requester_id}")
 async def accept_connection(requester_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
-    received = current_user.get("connectionRequestsReceived", [])
-    if requester_id not in received:
+    user_id = normalize_ref(current_user["_id"])
+    requester_ref = normalize_ref(requester_id)
+    received = normalize_ref_list(current_user.get("connectionRequestsReceived", []))
+    if requester_ref not in received:
         raise HTTPException(status_code=400, detail="No pending request from this user")
 
-    active = len(current_user.get("connections", []))
+    active = len(normalize_ref_list(current_user.get("connections", [])))
     if active >= MAX_CONNECTIONS:
         raise HTTPException(status_code=400, detail=f"Maximum {MAX_CONNECTIONS} connections reached")
 
@@ -922,7 +960,7 @@ async def accept_connection(requester_id: str, current_user: dict = Depends(get_
 
     conn_doc = {
         "id": str(uuid.uuid4()),
-        "users": [user_id, requester_id],
+        "users": [user_id, requester_ref],
         "status": "active",
         "createdAt": now.isoformat(),
         "expiresAt": expires_at.isoformat(),
@@ -931,10 +969,13 @@ async def accept_connection(requester_id: str, current_user: dict = Depends(get_
     await db.connections_data.insert_one(conn_doc)
 
     await db.users.update_one({"_id": current_user["_id"]}, {
-        "$addToSet": {"connections": requester_id},
-        "$pull": {"connectionRequestsReceived": requester_id}
+        "$addToSet": {"connections": requester_ref},
+        "$pull": {"connectionRequestsReceived": requester_ref}
     })
-    await db.users.update_one({"_id": ObjectId(requester_id)}, {
+    requester_user = await find_user_by_ref(requester_ref)
+    if not requester_user:
+        raise HTTPException(status_code=404, detail="Requester not found")
+    await db.users.update_one({"_id": requester_user["_id"]}, {
         "$addToSet": {"connections": user_id},
         "$pull": {"connectionRequestsSent": user_id}
     })
@@ -948,37 +989,46 @@ async def accept_connection(requester_id: str, current_user: dict = Depends(get_
         "read": False,
         "createdAt": now.isoformat()
     }
-    await db.users.update_one({"_id": ObjectId(requester_id)}, {"$push": {"notifications": notification}})
+    await db.users.update_one({"_id": requester_user["_id"]}, {"$push": {"notifications": notification}})
     return {"message": "Connection accepted", "expiresAt": expires_at.isoformat()}
 
 @api_router.post("/connections/reject/{requester_id}")
 async def reject_connection(requester_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
-    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"connectionRequestsReceived": requester_id}})
-    await db.users.update_one({"_id": ObjectId(requester_id)}, {"$pull": {"connectionRequestsSent": user_id}})
+    user_id = normalize_ref(current_user["_id"])
+    requester_ref = normalize_ref(requester_id)
+    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"connectionRequestsReceived": requester_ref}})
+    requester_user = await find_user_by_ref(requester_ref)
+    if requester_user:
+        await db.users.update_one({"_id": requester_user["_id"]}, {"$pull": {"connectionRequestsSent": user_id}})
     return {"message": "Connection rejected"}
 
 @api_router.post("/connections/cancel/{target_id}")
 async def cancel_connection(target_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
-    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"connectionRequestsSent": target_id}})
-    await db.users.update_one({"_id": ObjectId(target_id)}, {"$pull": {"connectionRequestsReceived": user_id}})
+    user_id = normalize_ref(current_user["_id"])
+    target_ref = normalize_ref(target_id)
+    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"connectionRequestsSent": target_ref}})
+    target_user = await find_user_by_ref(target_ref)
+    if target_user:
+        await db.users.update_one({"_id": target_user["_id"]}, {"$pull": {"connectionRequestsReceived": user_id}})
     return {"message": "Connection request cancelled"}
 
 @api_router.post("/connections/remove/{target_id}")
 async def remove_connection(target_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
+    user_id = normalize_ref(current_user["_id"])
+    target_ref = normalize_ref(target_id)
     await db.connections_data.update_many(
-        {"users": {"$all": [user_id, target_id]}, "status": "active"},
+        {"users": {"$all": [user_id, target_ref]}, "status": "active"},
         {"$set": {"status": "removed"}}
     )
-    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"connections": target_id}})
-    await db.users.update_one({"_id": ObjectId(target_id)}, {"$pull": {"connections": user_id}})
+    await db.users.update_one({"_id": current_user["_id"]}, {"$pull": {"connections": target_ref}})
+    target_user = await find_user_by_ref(target_ref)
+    if target_user:
+        await db.users.update_one({"_id": target_user["_id"]}, {"$pull": {"connections": user_id}})
     return {"message": "Connection removed"}
 
 @api_router.get("/connections")
 async def get_connections(current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
+    user_id = normalize_ref(current_user["_id"])
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # Active connections with timer
@@ -989,31 +1039,31 @@ async def get_connections(current_user: dict = Depends(get_current_user)):
 
     connections = []
     for conn in active_conns:
-        other_id = conn["users"][1] if conn["users"][0] == user_id else conn["users"][0]
-        if ObjectId.is_valid(other_id):
-            u = await db.users.find_one({"_id": ObjectId(other_id)}, {"password_hash": 0})
-            if u:
-                ud = serialize_user(u)
-                ud["connectionId"] = conn["id"]
-                ud["connectedAt"] = conn["createdAt"]
-                ud["expiresAt"] = conn["expiresAt"]
-                connections.append(ud)
+        users_in_conn = normalize_ref_list(conn.get("users", []))
+        if len(users_in_conn) < 2:
+            continue
+        other_id = users_in_conn[1] if users_in_conn[0] == user_id else users_in_conn[0]
+        u = await find_user_by_ref(other_id, {"password_hash": 0})
+        if u:
+            ud = serialize_user(u)
+            ud["connectionId"] = conn["id"]
+            ud["connectedAt"] = conn["createdAt"]
+            ud["expiresAt"] = conn["expiresAt"]
+            connections.append(ud)
 
     # Pending received
     pending_received = []
-    for rid in current_user.get("connectionRequestsReceived", []):
-        if ObjectId.is_valid(rid):
-            u = await db.users.find_one({"_id": ObjectId(rid)}, {"password_hash": 0})
-            if u:
-                pending_received.append(serialize_user(u))
+    for rid in normalize_ref_list(current_user.get("connectionRequestsReceived", [])):
+        u = await find_user_by_ref(rid, {"password_hash": 0})
+        if u:
+            pending_received.append(serialize_user(u))
 
     # Pending sent
     pending_sent = []
-    for sid in current_user.get("connectionRequestsSent", []):
-        if ObjectId.is_valid(sid):
-            u = await db.users.find_one({"_id": ObjectId(sid)}, {"password_hash": 0})
-            if u:
-                pending_sent.append(serialize_user(u))
+    for sid in normalize_ref_list(current_user.get("connectionRequestsSent", [])):
+        u = await find_user_by_ref(sid, {"password_hash": 0})
+        if u:
+            pending_sent.append(serialize_user(u))
 
     return {
         "connections": connections,
@@ -1213,50 +1263,45 @@ async def create_payment_order(req: CheckoutRequest, current_user: dict = Depend
         raise HTTPException(status_code=500, detail="Payment service unavailable")
 
     payment_session_id = cf_data.get("payment_session_id") or ""
-    payment_link = (
-        cf_data.get("payment_link")
-        or ""
-    )
+    payment_link = ""
     payment_link_id = ""
-
-    if not payment_link:
-        link_id = f"VSLINK_{uuid.uuid4().hex[:18]}"
-        link_payload = {
-            "link_id": link_id,
-            "link_amount": amount,
-            "link_currency": "INR",
-            "link_purpose": f"VivahSetu {plan['name']} Plan Subscription",
-            "link_auto_reminders": True,
-            "customer_details": {
-                "customer_name": current_user.get("name", "User"),
-                "customer_phone": current_user.get("phone", "9999999999") or "9999999999",
-                "customer_email": current_user.get("email", ""),
-            },
-            "link_meta": {
-                "return_url": req.returnUrl or "https://vivaahsetu.in/payment/success?order_id={order_id}",
-            },
-            "link_notes": {
-                "vivahsetu_order_id": order_id,
-                "plan_id": req.planId,
-                "user_id": user_id,
-            },
-        }
-        try:
-            async with httpx.AsyncClient() as client_http:
-                link_resp = await client_http.post(
-                    f"{CASHFREE_BASE_URL}/links",
-                    headers=get_cashfree_headers(),
-                    json=link_payload,
-                    timeout=15,
-                )
-                if link_resp.status_code in (200, 201):
-                    link_data = link_resp.json()
-                    payment_link = link_data.get("link_url") or ""
-                    payment_link_id = link_data.get("link_id") or link_id
-                else:
-                    logger.error(f"Cashfree create link failed: {link_resp.text}")
-        except httpx.RequestError as e:
-            logger.error(f"Cashfree payment link request error: {e}")
+    link_id = f"VSLINK_{uuid.uuid4().hex[:18]}"
+    link_payload = {
+        "link_id": link_id,
+        "link_amount": amount,
+        "link_currency": "INR",
+        "link_purpose": f"VivahSetu {plan['name']} Plan Subscription",
+        "link_auto_reminders": True,
+        "customer_details": {
+            "customer_name": current_user.get("name", "User"),
+            "customer_phone": current_user.get("phone", "9999999999") or "9999999999",
+            "customer_email": current_user.get("email", ""),
+        },
+        "link_meta": {
+            "return_url": req.returnUrl or "https://vivaahsetu.in/payment/success?order_id={order_id}",
+        },
+        "link_notes": {
+            "vivahsetu_order_id": order_id,
+            "plan_id": req.planId,
+            "user_id": user_id,
+        },
+    }
+    try:
+        async with httpx.AsyncClient() as client_http:
+            link_resp = await client_http.post(
+                f"{CASHFREE_BASE_URL}/links",
+                headers=get_cashfree_headers(),
+                json=link_payload,
+                timeout=15,
+            )
+            if link_resp.status_code in (200, 201):
+                link_data = link_resp.json()
+                payment_link = link_data.get("link_url") or ""
+                payment_link_id = link_data.get("link_id") or link_id
+            else:
+                logger.error(f"Cashfree create link failed: {link_resp.text}")
+    except httpx.RequestError as e:
+        logger.error(f"Cashfree payment link request error: {e}")
 
     # Store in DB
     tx = {
