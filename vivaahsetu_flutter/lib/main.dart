@@ -204,21 +204,57 @@ const Map<String, List<String>> _subCasteOptions = {
   'Theravada': ['Other'],
 };
 
-Map<String, dynamic> _asMap(dynamic value) =>
-    adapter.asMap(value);
+Map<String, dynamic> _asMap(dynamic value) => adapter.asMap(value);
 
 List<dynamic> _asList(dynamic value) => adapter.asList(value);
 
 String? _resolveMediaUrl(String? raw) => adapter.resolveMediaUrl(_baseUrl, raw);
 
-List<String> _photoUrls(Map<String, dynamic> data) => adapter.photoUrls(_baseUrl, data);
+List<String> _photoUrls(Map<String, dynamic> data) =>
+    adapter.photoUrls(_baseUrl, data);
 
-List<String> _mergeDropdownOptions(List<String> options, String? selectedValue) {
+String _relationshipStatus(Map<String, dynamic> data) =>
+    (data['relationshipStatus'] ?? data['relationship_status'] ?? '')
+        .toString()
+        .toUpperCase();
+
+void _applyRelationshipStatus(Map<String, dynamic> data, String status) {
+  final normalized = status.toUpperCase();
+  data['relationshipStatus'] = normalized;
+  data['relationship_status'] = normalized;
+  data['requestSent'] = normalized == 'REQUEST_SENT';
+  data['request_sent'] = normalized == 'REQUEST_SENT';
+  data['requestReceived'] = normalized == 'REQUEST_RECEIVED';
+  data['request_received'] = normalized == 'REQUEST_RECEIVED';
+  data['alreadyConnected'] = normalized == 'CONNECTED';
+  data['already_connected'] = normalized == 'CONNECTED';
+}
+
+bool _requestSentFlag(Map<String, dynamic> data) =>
+    _relationshipStatus(data) == 'REQUEST_SENT' ||
+    data['requestSent'] == true ||
+    data['request_sent'] == true;
+
+bool _requestReceivedFlag(Map<String, dynamic> data) =>
+    _relationshipStatus(data) == 'REQUEST_RECEIVED' ||
+    data['requestReceived'] == true ||
+    data['request_received'] == true;
+
+bool _alreadyConnectedFlag(Map<String, dynamic> data) =>
+    _relationshipStatus(data) == 'CONNECTED' ||
+    data['alreadyConnected'] == true ||
+    data['already_connected'] == true;
+
+List<String> _mergeDropdownOptions(
+  List<String> options,
+  String? selectedValue,
+) {
   final merged = <String>{
-    ...options.where((item) => item.trim().isNotEmpty).map((item) => item.trim()),
+    ...options
+        .where((item) => item.trim().isNotEmpty)
+        .map((item) => item.trim()),
     if ((selectedValue ?? '').trim().isNotEmpty) selectedValue!.trim(),
-  }.toList()
-    ..sort();
+  }.toList()..sort();
   return merged;
 }
 
@@ -238,7 +274,9 @@ Future<void> _launchPaymentUrl(BuildContext context, String link) async {
   final url = link.trim();
   if (url.isEmpty) {
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Payment link is not available yet. Please try again.')),
+      const SnackBar(
+        content: Text('Payment link is not available yet. Please try again.'),
+      ),
     );
     return;
   }
@@ -249,7 +287,8 @@ Future<void> _launchPaymentUrl(BuildContext context, String link) async {
     );
     return;
   }
-  final launched = await launchUrl(uri, mode: LaunchMode.externalApplication) ||
+  final launched =
+      await launchUrl(uri, mode: LaunchMode.externalApplication) ||
       await launchUrl(uri, mode: LaunchMode.platformDefault);
   if (launched || !context.mounted) return;
   await showDialog<void>(
@@ -258,7 +297,10 @@ Future<void> _launchPaymentUrl(BuildContext context, String link) async {
       title: const Text('Open Payment Link'),
       content: SelectableText(url),
       actions: [
-        TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Close')),
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
       ],
     ),
   );
@@ -327,7 +369,10 @@ class VivaahSetuApp extends StatelessWidget {
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: _surfaceColor,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
           border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: const BorderSide(color: _borderColor),
@@ -356,14 +401,14 @@ class VivaahSetuApp extends StatelessWidget {
 
 class ApiClient {
   ApiClient({required this.onUnauthorized, required this.onSessionRefresh})
-      : _dio = Dio(
-          BaseOptions(
-            baseUrl: '${_baseUrl.replaceAll(RegExp(r'/+$'), '')}/api',
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-            headers: {'Content-Type': 'application/json'},
-          ),
-        );
+    : _dio = Dio(
+        BaseOptions(
+          baseUrl: '${_baseUrl.replaceAll(RegExp(r'/+$'), '')}/api',
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+          headers: {'Content-Type': 'application/json'},
+        ),
+      );
 
   final Dio _dio;
   final Future<void> Function() onUnauthorized;
@@ -395,7 +440,9 @@ class ApiClient {
       if (e.response?.statusCode == 401 && token != null && token.isNotEmpty) {
         if (allowRetry) {
           final refreshedToken = await onSessionRefresh();
-          if (refreshedToken != null && refreshedToken.isNotEmpty && refreshedToken != token) {
+          if (refreshedToken != null &&
+              refreshedToken.isNotEmpty &&
+              refreshedToken != token) {
             return _request(
               method,
               path,
@@ -416,10 +463,12 @@ class ApiClient {
 
   Future<Map<String, dynamic>> login(String email, String password) async =>
       Map<String, dynamic>.from(
-        await _request('POST', '/auth/login', data: {
-          'email': email.trim(),
-          'password': password,
-        }) as Map,
+        await _request(
+              'POST',
+              '/auth/login',
+              data: {'email': email.trim(), 'password': password},
+            )
+            as Map,
       );
 
   Future<Map<String, dynamic>> register(
@@ -427,15 +476,19 @@ class ApiClient {
     String password,
     String name,
     String gender,
-  ) async =>
-      Map<String, dynamic>.from(
-        await _request('POST', '/auth/register', data: {
-          'email': email.trim(),
-          'password': password,
-          'name': name.trim(),
-          'gender': gender,
-        }) as Map,
-      );
+  ) async => Map<String, dynamic>.from(
+    await _request(
+          'POST',
+          '/auth/register',
+          data: {
+            'email': email.trim(),
+            'password': password,
+            'name': name.trim(),
+            'gender': gender,
+          },
+        )
+        as Map,
+  );
 
   Future<Map<String, dynamic>> firebaseSession({
     required String idToken,
@@ -445,23 +498,29 @@ class ApiClient {
     try {
       return _normalizeResponseMap(
         await _request(
-          'POST',
-          '/auth/firebase/session',
-          data: {
-            'id_token': idToken,
-            'gender': gender.toLowerCase(),
-            'name': name.trim(),
-          },
-        ) as Map<String, dynamic>,
+              'POST',
+              '/auth/firebase/session',
+              data: {
+                'id_token': idToken,
+                'gender': gender.toLowerCase(),
+                'name': name.trim(),
+              },
+            )
+            as Map<String, dynamic>,
       );
     } catch (_) {
       return _normalizeResponseMap(
         Map<String, dynamic>.from(
           await _request(
-            'POST',
-            '/auth/google-login',
-            data: {'idToken': idToken, 'gender': gender, 'name': name.trim()},
-          ) as Map,
+                'POST',
+                '/auth/google-login',
+                data: {
+                  'idToken': idToken,
+                  'gender': gender,
+                  'name': name.trim(),
+                },
+              )
+              as Map,
         ),
       );
     }
@@ -470,11 +529,15 @@ class ApiClient {
   Future<Map<String, dynamic>> me(String token) async {
     try {
       return _normalizeResponseMap(
-        Map<String, dynamic>.from(await _request('GET', '/auth/me', token: token) as Map),
+        Map<String, dynamic>.from(
+          await _request('GET', '/auth/me', token: token) as Map,
+        ),
       );
     } catch (_) {
       return _normalizeResponseMap(
-        Map<String, dynamic>.from(await _request('GET', '/profile/me', token: token) as Map),
+        Map<String, dynamic>.from(
+          await _request('GET', '/profile/me', token: token) as Map,
+        ),
       );
     }
   }
@@ -492,7 +555,8 @@ class ApiClient {
     } catch (_) {
       return _normalizeResponseMap(
         Map<String, dynamic>.from(
-          await _request('PUT', '/profile/update', token: token, data: data) as Map,
+          await _request('PUT', '/profile/update', token: token, data: data)
+              as Map,
         ),
       );
     }
@@ -503,73 +567,68 @@ class ApiClient {
     Map<String, dynamic> filters,
   ) async {
     final normalizedFilters = adapter.normalizeMatchFilters(filters);
-    Map<String, dynamic> firstResponse;
-    try {
-      firstResponse = _normalizeResponseMap(
-        Map<String, dynamic>.from(
-          await _request(
-            'GET',
-            '/matches',
-            token: token,
-            queryParameters: normalizedFilters,
-          ) as Map,
-        ),
-      );
-    } catch (_) {
-      firstResponse = _normalizeResponseMap(
-        Map<String, dynamic>.from(
-          await _request(
-            'GET',
-            '/matches',
-            token: token,
-            queryParameters: {
-              if (normalizedFilters['page'] != null) 'page': normalizedFilters['page'],
-              if (normalizedFilters['limit'] != null) 'limit': normalizedFilters['limit'],
-            },
-          ) as Map,
-        ),
-      );
-    }
-    final firstMatches = _asList(firstResponse['matches']);
-    final hasCustomFilters = normalizedFilters.keys.any((key) => key != 'page' && key != 'limit');
-    if (firstMatches.isNotEmpty || !hasCustomFilters) {
-      return firstResponse;
-    }
-    final fallbackResponse = _normalizeResponseMap(
+    return _normalizeResponseMap(
       Map<String, dynamic>.from(
         await _request(
-          'GET',
-          '/matches',
-          token: token,
-          queryParameters: {
-            if (normalizedFilters['page'] != null) 'page': normalizedFilters['page'],
-            if (normalizedFilters['limit'] != null) 'limit': normalizedFilters['limit'],
-          },
-        ) as Map,
+              'GET',
+              '/matches',
+              token: token,
+              queryParameters: normalizedFilters,
+            )
+            as Map,
       ),
     );
-    return fallbackResponse;
   }
 
   Future<Map<String, dynamic>> connections(String token) async =>
       _normalizeResponseMap(
-        Map<String, dynamic>.from(await _request('GET', '/connections', token: token) as Map),
+        Map<String, dynamic>.from(
+          await _request('GET', '/connections', token: token) as Map,
+        ),
       );
 
-  Future<void> sendRequest(String token, String id) async =>
-      _request('POST', '/connections/request/$id', token: token);
-  Future<void> acceptRequest(String token, String id) async =>
-      _request('POST', '/connections/accept/$id', token: token);
-  Future<void> rejectRequest(String token, String id) async =>
-      _request('POST', '/connections/reject/$id', token: token);
-  Future<void> cancelRequest(String token, String id) async =>
-      _request('POST', '/connections/cancel/$id', token: token);
-  Future<void> removeConnection(String token, String id) async =>
-      _request('POST', '/connections/remove/$id', token: token);
+  Future<Map<String, dynamic>> sendRequest(String token, String id) async =>
+      _normalizeResponseMap(
+        Map<String, dynamic>.from(
+          await _request('POST', '/connections/request/$id', token: token)
+              as Map,
+        ),
+      );
+  Future<Map<String, dynamic>> acceptRequest(String token, String id) async =>
+      _normalizeResponseMap(
+        Map<String, dynamic>.from(
+          await _request('POST', '/connections/accept/$id', token: token)
+              as Map,
+        ),
+      );
+  Future<Map<String, dynamic>> rejectRequest(String token, String id) async =>
+      _normalizeResponseMap(
+        Map<String, dynamic>.from(
+          await _request('POST', '/connections/reject/$id', token: token)
+              as Map,
+        ),
+      );
+  Future<Map<String, dynamic>> cancelRequest(String token, String id) async =>
+      _normalizeResponseMap(
+        Map<String, dynamic>.from(
+          await _request('POST', '/connections/cancel/$id', token: token)
+              as Map,
+        ),
+      );
+  Future<Map<String, dynamic>> removeConnection(
+    String token,
+    String id,
+  ) async => _normalizeResponseMap(
+    Map<String, dynamic>.from(
+      await _request('POST', '/connections/remove/$id', token: token) as Map,
+    ),
+  );
 
   Future<Map<String, dynamic>> profile(String token, String id) async =>
       _normalizeResponseMap(
-        Map<String, dynamic>.from(await _request('GET', '/profile/$id', token: token) as Map),
+        Map<String, dynamic>.from(
+          await _request('GET', '/profile/$id', token: token) as Map,
+        ),
       );
 
   Future<List<dynamic>> messages(String token, String partnerId) async {
@@ -587,18 +646,29 @@ class ApiClient {
     return messages;
   }
 
-  Future<void> sendMessage(String token, String partnerId, String content) async {
-    await _request('POST', '/chat/send', token: token, data: {
-      'receiver_id': partnerId,
-      'receiverId': partnerId,
-      'content': content,
-    });
+  Future<void> sendMessage(
+    String token,
+    String partnerId,
+    String content,
+  ) async {
+    await _request(
+      'POST',
+      '/chat/send',
+      token: token,
+      data: {
+        'receiver_id': partnerId,
+        'receiverId': partnerId,
+        'content': content,
+      },
+    );
   }
 
   Future<List<dynamic>> notifications(String token) async {
     final response = await _request('GET', '/notifications', token: token);
     if (response is Map) {
-      return List<dynamic>.from(response['notifications'] as List? ?? <dynamic>[]);
+      return List<dynamic>.from(
+        response['notifications'] as List? ?? <dynamic>[],
+      );
     }
     return <dynamic>[];
   }
@@ -619,9 +689,14 @@ class ApiClient {
   Future<List<String>> castes(String religion) async {
     if (religion.trim().isEmpty) return <String>[];
     try {
-      final response = await _request('GET', '/castes/${Uri.encodeComponent(religion.trim())}');
+      final response = await _request(
+        'GET',
+        '/castes/${Uri.encodeComponent(religion.trim())}',
+      );
       if (response is Map) {
-        return _asList(response['castes']).map((item) => item.toString()).toList();
+        return _asList(
+          response['castes'],
+        ).map((item) => item.toString()).toList();
       }
       return <String>[];
     } catch (_) {
@@ -632,9 +707,14 @@ class ApiClient {
   Future<List<String>> subCastes(String caste) async {
     if (caste.trim().isEmpty) return <String>[];
     try {
-      final response = await _request('GET', '/subcastes/${Uri.encodeComponent(caste.trim())}');
+      final response = await _request(
+        'GET',
+        '/subcastes/${Uri.encodeComponent(caste.trim())}',
+      );
       if (response is Map) {
-        return _asList(response['subcastes']).map((item) => item.toString()).toList();
+        return _asList(
+          response['subcastes'],
+        ).map((item) => item.toString()).toList();
       }
       return <String>[];
     } catch (_) {
@@ -697,7 +777,7 @@ class ApiClient {
     }
     if (response is Map) {
       return _asList(response['photos'])
-          .map((item) => _resolveMediaUrl(item?.toString()) ?? '')
+          .map((item) => item?.toString().trim() ?? '')
           .where((item) => item.isNotEmpty)
           .toList();
     }
@@ -705,10 +785,14 @@ class ApiClient {
   }
 
   Future<List<dynamic>> deletePhoto(String token, int index) async {
-    final response = await _request('DELETE', '/profile/photo/$index', token: token);
+    final response = await _request(
+      'DELETE',
+      '/profile/photo/$index',
+      token: token,
+    );
     if (response is Map) {
       return _asList(response['photos'])
-          .map((item) => _resolveMediaUrl(item?.toString()) ?? '')
+          .map((item) => item?.toString().trim() ?? '')
           .where((item) => item.isNotEmpty)
           .toList();
     }
@@ -716,10 +800,14 @@ class ApiClient {
   }
 
   Future<List<dynamic>> setPrimaryPhoto(String token, int index) async {
-    final response = await _request('POST', '/profile/photo/$index/primary', token: token);
+    final response = await _request(
+      'POST',
+      '/profile/photo/$index/primary',
+      token: token,
+    );
     if (response is Map) {
       return _asList(response['photos'])
-          .map((item) => _resolveMediaUrl(item?.toString()) ?? '')
+          .map((item) => item?.toString().trim() ?? '')
           .where((item) => item.isNotEmpty)
           .toList();
     }
@@ -727,10 +815,15 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> settings(String token) async {
-    return Map<String, dynamic>.from(await _request('GET', '/settings', token: token) as Map);
+    return Map<String, dynamic>.from(
+      await _request('GET', '/settings', token: token) as Map,
+    );
   }
 
-  Future<Map<String, dynamic>> updateSettings(String token, Map<String, dynamic> data) async {
+  Future<Map<String, dynamic>> updateSettings(
+    String token,
+    Map<String, dynamic> data,
+  ) async {
     return Map<String, dynamic>.from(
       await _request('PUT', '/settings', token: token, data: data) as Map,
     );
@@ -744,19 +837,26 @@ class ApiClient {
       response = await _request('GET', '/subscriptions/plans');
     }
     if (response is Map) {
-      final normalized = _normalizeResponseMap(Map<String, dynamic>.from(response));
-      final plans = List<dynamic>.from(normalized['plans'] as List? ?? <dynamic>[])
-          .map((item) {
+      final normalized = _normalizeResponseMap(
+        Map<String, dynamic>.from(response),
+      );
+      final plans =
+          List<dynamic>.from(normalized['plans'] as List? ?? <dynamic>[]).map((
+            item,
+          ) {
             final plan = _asMap(item);
-            plan['discountedPrice'] ??= plan['discounted_price'] ?? plan['price'] ?? 0;
-            plan['price'] ??= plan['original_price'] ?? plan['discountedPrice'] ?? 0;
-            plan['available'] ??= plan['is_available_for_checkout'] ?? (plan['coming_soon'] != true);
+            plan['discountedPrice'] ??=
+                plan['discounted_price'] ?? plan['price'] ?? 0;
+            plan['price'] ??=
+                plan['original_price'] ?? plan['discountedPrice'] ?? 0;
+            plan['available'] ??=
+                plan['is_available_for_checkout'] ??
+                (plan['coming_soon'] != true);
             if (plan['coming_soon'] == null && plan['available'] != null) {
               plan['coming_soon'] = plan['available'] != true;
             }
             return plan;
-          })
-          .toList();
+          }).toList();
       return plans;
     }
     return List<dynamic>.from(response as List? ?? <dynamic>[]);
@@ -767,28 +867,46 @@ class ApiClient {
       final data = Map<String, dynamic>.from(raw);
       data['orderId'] ??= data['order_id'] ?? data['id'] ?? '';
       data['paymentSessionId'] ??= data['payment_session_id'] ?? '';
-      data['paymentLink'] ??= data['payment_link'] ?? '';
+      data['paymentLink'] ??=
+          data['payment_link'] ?? data['redirect_url'] ?? '';
       data['status'] ??= data['order_status'] ?? 'pending';
       return data;
     }
+
     try {
-      return normalizeOrder(Map<String, dynamic>.from(
-        await _request(
-          'POST',
-          '/cashfree/checkout',
-          token: token,
-          data: {'planId': planId},
-        ) as Map,
-      ));
+      return normalizeOrder(
+        Map<String, dynamic>.from(
+          await _request(
+                'POST',
+                '/subscriptions/create-order',
+                token: token,
+                data: {
+                  'planId': planId,
+                  'plan_id': planId,
+                  'origin_url': 'https://vivaahsetu.in',
+                  'originUrl': 'https://vivaahsetu.in',
+                },
+              )
+              as Map,
+        ),
+      );
     } catch (_) {
-      return normalizeOrder(Map<String, dynamic>.from(
-        await _request(
-          'POST',
-          '/payment/create-order',
-          token: token,
-          data: {'plan_id': planId},
-        ) as Map,
-      ));
+      return normalizeOrder(
+        Map<String, dynamic>.from(
+          await _request(
+                'POST',
+                '/cashfree/checkout',
+                token: token,
+                data: {
+                  'planId': planId,
+                  'plan_id': planId,
+                  'origin_url': 'https://vivaahsetu.in',
+                  'originUrl': 'https://vivaahsetu.in',
+                },
+              )
+              as Map,
+        ),
+      );
     }
   }
 
@@ -796,26 +914,30 @@ class ApiClient {
     Map<String, dynamic> normalizeVerify(Map<String, dynamic> raw) {
       final data = Map<String, dynamic>.from(raw);
       data['orderId'] ??= data['order_id'] ?? orderId;
-      data['status'] ??= data['order_status'] ?? data['payment_status'] ?? 'pending';
+      data['status'] ??=
+          data['order_status'] ?? data['payment_status'] ?? 'pending';
       return data;
     }
+
     try {
-      return normalizeVerify(Map<String, dynamic>.from(
-        await _request(
-          'POST',
-          '/cashfree/verify',
-          token: token,
-          queryParameters: {'orderId': orderId},
-        ) as Map,
-      ));
+      return normalizeVerify(
+        Map<String, dynamic>.from(
+          await _request(
+                'POST',
+                '/cashfree/verify',
+                token: token,
+                queryParameters: {'orderId': orderId},
+              )
+              as Map,
+        ),
+      );
     } catch (_) {
-      return normalizeVerify(Map<String, dynamic>.from(
-        await _request(
-          'GET',
-          '/payment/verify/$orderId',
-          token: token,
-        ) as Map,
-      ));
+      return normalizeVerify(
+        Map<String, dynamic>.from(
+          await _request('GET', '/payment/verify/$orderId', token: token)
+              as Map,
+        ),
+      );
     }
   }
 }
@@ -837,7 +959,8 @@ class _AppRootState extends State<AppRoot> {
   bool _needsProfileCompletion(Map<String, dynamic> user) {
     bool missing(String key) => (user[key]?.toString().trim().isEmpty ?? true);
     final gender = user['gender']?.toString().trim().toLowerCase() ?? '';
-    final profileRequired = user['profile_required'] == true || user['profileRequired'] == true;
+    final profileRequired =
+        user['profile_required'] == true || user['profileRequired'] == true;
     return profileRequired ||
         missing('name') ||
         missing('dob') ||
@@ -848,7 +971,10 @@ class _AppRootState extends State<AppRoot> {
   @override
   void initState() {
     super.initState();
-    _api = ApiClient(onUnauthorized: _logout, onSessionRefresh: _refreshSessionFromFirebase);
+    _api = ApiClient(
+      onUnauthorized: _logout,
+      onSessionRefresh: _refreshSessionFromFirebase,
+    );
     _load();
   }
 
@@ -912,7 +1038,9 @@ class _AppRootState extends State<AppRoot> {
     final token = prefs.getString('auth_token');
     final cachedUser = raw == null
         ? null
-        : _normalizeResponseMap(Map<String, dynamic>.from(jsonDecode(raw) as Map));
+        : _normalizeResponseMap(
+            Map<String, dynamic>.from(jsonDecode(raw) as Map),
+          );
     if (token == null || cachedUser == null) {
       setState(() {
         _token = null;
@@ -1017,9 +1145,7 @@ class _LoginPageState extends State<LoginPage> {
   final _email = TextEditingController();
   final _password = TextEditingController();
   final _name = TextEditingController();
-  final _googleSignIn = GoogleSignIn(
-    scopes: const ['email', 'profile'],
-  );
+  final _googleSignIn = GoogleSignIn(scopes: const ['email', 'profile']);
   bool _signup = false;
   bool _emailLoading = false;
   bool _googleLoading = false;
@@ -1036,7 +1162,8 @@ class _LoginPageState extends State<LoginPage> {
         .split(RegExp(r'[._-]+'))
         .where((part) => part.trim().isNotEmpty)
         .map(
-          (part) => '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}',
+          (part) =>
+              '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}',
         )
         .join(' ');
   }
@@ -1136,8 +1263,9 @@ class _LoginPageState extends State<LoginPage> {
         idToken: idToken,
         accessToken: accessToken,
       );
-      final firebaseUser =
-          (await FirebaseAuth.instance.signInWithCredential(credential)).user;
+      final firebaseUser = (await FirebaseAuth.instance.signInWithCredential(
+        credential,
+      )).user;
       if (firebaseUser == null) {
         throw const FormatException('Firebase sign-in did not return a user.');
       }
@@ -1207,7 +1335,9 @@ class _LoginPageState extends State<LoginPage> {
 
   void _toast(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -1259,7 +1389,9 @@ class _LoginPageState extends State<LoginPage> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    onPressed: (_googleLoading || _emailLoading) ? null : _google,
+                    onPressed: (_googleLoading || _emailLoading)
+                        ? null
+                        : _google,
                     child: _googleLoading
                         ? const SizedBox(
                             width: 20,
@@ -1339,7 +1471,9 @@ class _LoginPageState extends State<LoginPage> {
                           onSelected: (_) => setState(() => _gender = 'Male'),
                           selectedColor: _primaryColor,
                           labelStyle: TextStyle(
-                            color: _gender == 'Male' ? Colors.white : _textColor,
+                            color: _gender == 'Male'
+                                ? Colors.white
+                                : _textColor,
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -1349,7 +1483,9 @@ class _LoginPageState extends State<LoginPage> {
                           onSelected: (_) => setState(() => _gender = 'Female'),
                           selectedColor: _primaryColor,
                           labelStyle: TextStyle(
-                            color: _gender == 'Female' ? Colors.white : _textColor,
+                            color: _gender == 'Female'
+                                ? Colors.white
+                                : _textColor,
                           ),
                         ),
                       ],
@@ -1369,9 +1505,12 @@ class _LoginPageState extends State<LoginPage> {
                     icon: Icons.lock_outline,
                     obscureText: !_showPassword,
                     trailing: IconButton(
-                      onPressed: () => setState(() => _showPassword = !_showPassword),
+                      onPressed: () =>
+                          setState(() => _showPassword = !_showPassword),
                       icon: Icon(
-                        _showPassword ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                        _showPassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
                         color: _textSecondaryColor,
                       ),
                     ),
@@ -1385,7 +1524,9 @@ class _LoginPageState extends State<LoginPage> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    onPressed: (_emailLoading || _googleLoading) ? null : _submit,
+                    onPressed: (_emailLoading || _googleLoading)
+                        ? null
+                        : _submit,
                     child: _emailLoading
                         ? const SizedBox(
                             width: 20,
@@ -1427,10 +1568,19 @@ class _LoginPageState extends State<LoginPage> {
                     spacing: 16,
                     runSpacing: 10,
                     children: const [
-                      _FeaturePill(icon: Icons.verified, text: 'Verified Profiles'),
-                      _FeaturePill(icon: Icons.favorite, text: 'Serious Matchmaking'),
+                      _FeaturePill(
+                        icon: Icons.verified,
+                        text: 'Verified Profiles',
+                      ),
+                      _FeaturePill(
+                        icon: Icons.favorite,
+                        text: 'Serious Matchmaking',
+                      ),
                       _FeaturePill(icon: Icons.schedule, text: '15-Day Timer'),
-                      _FeaturePill(icon: Icons.people, text: 'Max 5 Connections'),
+                      _FeaturePill(
+                        icon: Icons.people,
+                        text: 'Max 5 Connections',
+                      ),
                     ],
                   ),
                 ],
@@ -1507,7 +1657,12 @@ class _ShellPageState extends State<ShellPage> {
   @override
   Widget build(BuildContext context) {
     final pages = [
-      HomeTab(api: widget.api, token: widget.token, user: widget.user, onNavigate: _goToTab),
+      HomeTab(
+        api: widget.api,
+        token: widget.token,
+        user: widget.user,
+        onNavigate: _goToTab,
+      ),
       ConnectionsTab(api: widget.api, token: widget.token, user: widget.user),
       MessagesTab(api: widget.api, token: widget.token, user: widget.user),
       ProfileTab(
@@ -1530,7 +1685,11 @@ class _ShellPageState extends State<ShellPage> {
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: _borderColor),
             boxShadow: const [
-              BoxShadow(color: Color(0x16000000), blurRadius: 16, offset: Offset(0, 6)),
+              BoxShadow(
+                color: Color(0x16000000),
+                blurRadius: 16,
+                offset: Offset(0, 6),
+              ),
             ],
           ),
           child: Row(
@@ -1609,7 +1768,9 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Map<String, dynamic> _partnerFilters(Map<String, dynamic> profile) {
-    final prefs = _asMap(profile['partnerPreferences'] ?? profile['partner_preferences']);
+    final prefs = _asMap(
+      profile['partnerPreferences'] ?? profile['partner_preferences'],
+    );
 
     final filters = <String, dynamic>{'page': 1, 'limit': 4};
     if (prefs['age_min'] != null) filters['age_min'] = prefs['age_min'];
@@ -1660,7 +1821,8 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Future<void> _load() async {
-    final firstPaintLoad = _profile == null && _connections == null && _previewMatches.isEmpty;
+    final firstPaintLoad =
+        _profile == null && _connections == null && _previewMatches.isEmpty;
     if (firstPaintLoad) {
       setState(() => _loading = true);
     }
@@ -1677,7 +1839,9 @@ class _HomeTabState extends State<HomeTab> {
     final profileFuture = safe(() => widget.api.me(widget.token));
     final connectionsFuture = safe(() => widget.api.connections(widget.token));
     final unreadFuture = safe(() => widget.api.unreadCount(widget.token));
-    final notificationsFuture = safe(() => widget.api.notifications(widget.token));
+    final notificationsFuture = safe(
+      () => widget.api.notifications(widget.token),
+    );
     final previewMatchesFuture = safe(
       () => widget.api.matches(widget.token, _partnerFilters(seedProfile)),
     );
@@ -1704,8 +1868,12 @@ class _HomeTabState extends State<HomeTab> {
     if (!mounted) return;
 
     final profileResult = details[0];
-    final notifications = List<dynamic>.from(details[1] as List? ?? <dynamic>[]);
-    final unreadNotifications = notifications.where((item) => _asMap(item)['read'] != true).length;
+    final notifications = List<dynamic>.from(
+      details[1] as List? ?? <dynamic>[],
+    );
+    final unreadNotifications = notifications
+        .where((item) => _asMap(item)['read'] != true)
+        .length;
     final previewPayload = _asMap(details[2]);
 
     setState(() {
@@ -1713,7 +1881,9 @@ class _HomeTabState extends State<HomeTab> {
         _profile = _asMap(profileResult);
       }
       _unreadNotifications = unreadNotifications;
-      _previewMatches = List<dynamic>.from(previewPayload['matches'] as List? ?? <dynamic>[]);
+      _previewMatches = List<dynamic>.from(
+        previewPayload['matches'] as List? ?? <dynamic>[],
+      );
     });
 
     final latestProfile = _profile;
@@ -1728,12 +1898,15 @@ class _HomeTabState extends State<HomeTab> {
 
   Future<void> _refreshPreviewMatches(Map<String, dynamic> profile) async {
     try {
-      final payload = await widget.api.matches(widget.token, _partnerFilters(profile))
+      final payload = await widget.api
+          .matches(widget.token, _partnerFilters(profile))
           .timeout(const Duration(seconds: 8));
       if (!mounted) return;
       final map = _asMap(payload);
       setState(() {
-        _previewMatches = List<dynamic>.from(map['matches'] as List? ?? <dynamic>[]);
+        _previewMatches = List<dynamic>.from(
+          map['matches'] as List? ?? <dynamic>[],
+        );
       });
     } catch (_) {
       // Keep existing match preview on transient failures.
@@ -1741,8 +1914,20 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   int _progress(Map<String, dynamic> p) {
-    const fields = ['name', 'age', 'gender', 'height', 'religion', 'city', 'education', 'occupation', 'about'];
-    final filled = fields.where((f) => p[f] != null && p[f].toString().trim().isNotEmpty).length;
+    const fields = [
+      'name',
+      'age',
+      'gender',
+      'height',
+      'religion',
+      'city',
+      'education',
+      'occupation',
+      'about',
+    ];
+    final filled = fields
+        .where((f) => p[f] != null && p[f].toString().trim().isNotEmpty)
+        .length;
     final hasPhoto = (p['photos'] as List? ?? []).isNotEmpty ? 1 : 0;
     return (((filled + hasPhoto) / (fields.length + 1)) * 100).round();
   }
@@ -1750,18 +1935,41 @@ class _HomeTabState extends State<HomeTab> {
   @override
   Widget build(BuildContext context) {
     final name = widget.user['name']?.toString().split(' ').first ?? 'User';
-    final planRaw = _profile?['plan']?.toString() ?? widget.user['plan']?.toString() ?? 'free';
-    final plan = planRaw.substring(0, 1).toUpperCase() + planRaw.substring(1).toLowerCase();
+    final planRaw =
+        _profile?['plan']?.toString() ??
+        widget.user['plan']?.toString() ??
+        'free';
+    final plan =
+        planRaw.substring(0, 1).toUpperCase() +
+        planRaw.substring(1).toLowerCase();
     final count = (_connections?['count'] as num?)?.toInt() ?? 0;
     final max = (_connections?['max'] as num?)?.toInt() ?? 5;
-    final receivedCount = List<dynamic>.from(_connections?['pendingReceived'] as List? ?? const <dynamic>[]).length;
-    final sentCount = List<dynamic>.from(_connections?['pendingSent'] as List? ?? const <dynamic>[]).length;
+    final receivedCount = List<dynamic>.from(
+      _connections?['pendingReceived'] as List? ?? const <dynamic>[],
+    ).length;
+    final sentCount = List<dynamic>.from(
+      _connections?['pendingSent'] as List? ?? const <dynamic>[],
+    ).length;
     final progress = _profile == null ? 0 : _progress(_profile!);
     final totalInbox = _unreadChats + _unreadNotifications;
     final now = DateTime.now();
     const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    final todaySubtitle = '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}';
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final todaySubtitle =
+        '${weekdays[now.weekday - 1]}, ${months[now.month - 1]} ${now.day}';
 
     return Scaffold(
       backgroundColor: _postLoginBackground,
@@ -1782,7 +1990,11 @@ class _HomeTabState extends State<HomeTab> {
                   ),
                   borderRadius: BorderRadius.circular(28),
                   boxShadow: const [
-                    BoxShadow(color: Color(0x249B1233), blurRadius: 24, offset: Offset(0, 12)),
+                    BoxShadow(
+                      color: Color(0x249B1233),
+                      blurRadius: 24,
+                      offset: Offset(0, 12),
+                    ),
                   ],
                 ),
                 child: Stack(
@@ -1821,7 +2033,10 @@ class _HomeTabState extends State<HomeTab> {
                                 children: [
                                   const Text(
                                     'Welcome back,',
-                                    style: TextStyle(fontSize: 13, color: Colors.white70),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.white70,
+                                    ),
                                   ),
                                   const SizedBox(height: 2),
                                   Text(
@@ -1835,7 +2050,10 @@ class _HomeTabState extends State<HomeTab> {
                                   const SizedBox(height: 4),
                                   Text(
                                     todaySubtitle,
-                                    style: const TextStyle(fontSize: 13, color: Colors.white70),
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.white70,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -1847,21 +2065,33 @@ class _HomeTabState extends State<HomeTab> {
                                   onPressed: () {
                                     Navigator.of(context).push(
                                       MaterialPageRoute<void>(
-                                        builder: (_) => NotificationsPage(api: widget.api, token: widget.token),
+                                        builder: (_) => NotificationsPage(
+                                          api: widget.api,
+                                          token: widget.token,
+                                        ),
                                       ),
                                     );
                                   },
-                                  icon: const Icon(Icons.notifications_none_rounded, color: Colors.white, size: 26),
+                                  icon: const Icon(
+                                    Icons.notifications_none_rounded,
+                                    color: Colors.white,
+                                    size: 26,
+                                  ),
                                 ),
                                 if (totalInbox > 0)
                                   Positioned(
                                     right: 6,
                                     top: 4,
                                     child: Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 6,
+                                        vertical: 2,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: _secondaryColor,
-                                        borderRadius: BorderRadius.circular(999),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
                                       ),
                                       child: Text(
                                         totalInbox > 99 ? '99+' : '$totalInbox',
@@ -1891,9 +2121,14 @@ class _HomeTabState extends State<HomeTab> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.15),
+                                      color: Colors.white.withValues(
+                                        alpha: 0.15,
+                                      ),
                                       borderRadius: BorderRadius.circular(999),
                                       border: Border.all(color: Colors.white24),
                                     ),
@@ -1909,7 +2144,10 @@ class _HomeTabState extends State<HomeTab> {
                                   const SizedBox(height: 8),
                                   const Text(
                                     'Serious matchmaking, curated for you',
-                                    style: TextStyle(fontSize: 13, color: Colors.white70),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: Colors.white70,
+                                    ),
                                   ),
                                 ],
                               ),
@@ -1922,24 +2160,40 @@ class _HomeTabState extends State<HomeTab> {
                             Expanded(
                               child: FilledButton.icon(
                                 onPressed: _openBrowse,
-                                icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                                icon: const Icon(
+                                  Icons.auto_awesome_rounded,
+                                  size: 18,
+                                ),
                                 label: const Text('Browse Matches'),
                                 style: FilledButton.styleFrom(
                                   backgroundColor: Colors.white,
                                   foregroundColor: _shaadiMaroon,
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
                                 ),
                               ),
                             ),
                             const SizedBox(width: 10),
                             OutlinedButton.icon(
                               onPressed: _openEditProfile,
-                              icon: const Icon(Icons.edit_note_rounded, size: 18, color: Colors.white),
-                              label: const Text('Edit', style: TextStyle(color: Colors.white)),
+                              icon: const Icon(
+                                Icons.edit_note_rounded,
+                                size: 18,
+                                color: Colors.white,
+                              ),
+                              label: const Text(
+                                'Edit',
+                                style: TextStyle(color: Colors.white),
+                              ),
                               style: OutlinedButton.styleFrom(
                                 side: const BorderSide(color: Colors.white24),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                                backgroundColor: Colors.white.withValues(alpha: 0.12),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                backgroundColor: Colors.white.withValues(
+                                  alpha: 0.12,
+                                ),
                               ),
                             ),
                           ],
@@ -1960,7 +2214,11 @@ class _HomeTabState extends State<HomeTab> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(20),
                     boxShadow: const [
-                      BoxShadow(color: Color(0x12000000), blurRadius: 16, offset: Offset(0, 8)),
+                      BoxShadow(
+                        color: Color(0x12000000),
+                        blurRadius: 16,
+                        offset: Offset(0, 8),
+                      ),
                     ],
                   ),
                   child: Column(
@@ -1968,18 +2226,29 @@ class _HomeTabState extends State<HomeTab> {
                     children: [
                       const Row(
                         children: [
-                          Icon(Icons.check_circle, color: _primaryColor, size: 24),
+                          Icon(
+                            Icons.check_circle,
+                            color: _primaryColor,
+                            size: 24,
+                          ),
                           SizedBox(width: 8),
                           Text(
                             'Complete Your Profile',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textColor),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: _textColor,
+                            ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 8),
                       Text(
                         '$progress% complete - add more details for better matches!',
-                        style: const TextStyle(fontSize: 14, color: _textSecondaryColor),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: _textSecondaryColor,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       ClipRRect(
@@ -1988,7 +2257,9 @@ class _HomeTabState extends State<HomeTab> {
                           value: progress / 100,
                           minHeight: 8,
                           backgroundColor: _surfaceColor,
-                          valueColor: const AlwaysStoppedAnimation<Color>(_primaryColor),
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                            _primaryColor,
+                          ),
                         ),
                       ),
                     ],
@@ -1998,7 +2269,11 @@ class _HomeTabState extends State<HomeTab> {
             if (progress < 100) const SizedBox(height: 16),
             const Text(
               'Dashboard',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _textColor),
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: _textColor,
+              ),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -2034,7 +2309,10 @@ class _HomeTabState extends State<HomeTab> {
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => NotificationsPage(api: widget.api, token: widget.token),
+                        builder: (_) => NotificationsPage(
+                          api: widget.api,
+                          token: widget.token,
+                        ),
                       ),
                     );
                   },
@@ -2044,7 +2322,11 @@ class _HomeTabState extends State<HomeTab> {
             const SizedBox(height: 24),
             const Text(
               'Recommended Profiles For You',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: _textColor),
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: _textColor,
+              ),
             ),
             const SizedBox(height: 10),
             if (_loading && _previewMatches.isEmpty)
@@ -2085,26 +2367,38 @@ class _HomeTabState extends State<HomeTab> {
                       final id = p['id']?.toString() ?? '';
                       if (id.isEmpty) return;
                       try {
-                        await widget.api.sendRequest(widget.token, id);
+                        final response = await widget.api.sendRequest(
+                          widget.token,
+                          id,
+                        );
                         if (!mounted) return;
                         setState(() {
                           _previewMatches = _previewMatches.map((item) {
                             final map = _asMap(item);
                             if (map['id']?.toString() == id) {
-                              map['requestSent'] = true;
-                              map['request_sent'] = true;
+                              _applyRelationshipStatus(
+                                map,
+                                response['relationshipStatus']?.toString() ??
+                                    'REQUEST_SENT',
+                              );
                             }
                             return map;
                           }).toList();
                         });
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Connection request sent')),
+                          const SnackBar(
+                            content: Text('Connection request sent'),
+                          ),
                         );
                         await _load();
                       } catch (e) {
                         if (!mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+                          SnackBar(
+                            content: Text(
+                              e.toString().replaceFirst('Exception: ', ''),
+                            ),
+                          ),
                         );
                       }
                     },
@@ -2154,7 +2448,11 @@ class _HomeTabState extends State<HomeTab> {
                         children: [
                           Text(
                             'Upgrade to Premium',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.white),
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
                           ),
                           SizedBox(height: 4),
                           Text(
@@ -2239,10 +2537,15 @@ class _BrowseTabState extends State<BrowseTab> {
     };
     final minAge = sourceFilters['age_min'] ?? sourceFilters['minAge'];
     final maxAge = sourceFilters['age_max'] ?? sourceFilters['maxAge'];
-    final city = (sourceFilters['location'] ?? sourceFilters['city'] ?? '').toString().trim();
+    final city = (sourceFilters['location'] ?? sourceFilters['city'] ?? '')
+        .toString()
+        .trim();
     final religion = (sourceFilters['religion'] ?? '').toString().trim();
     final caste = (sourceFilters['caste'] ?? '').toString().trim();
-    final profession = (sourceFilters['profession'] ?? sourceFilters['occupation'] ?? '').toString().trim();
+    final profession =
+        (sourceFilters['profession'] ?? sourceFilters['occupation'] ?? '')
+            .toString()
+            .trim();
     if (minAge != null) _minAge.text = minAge.toString();
     if (maxAge != null) _maxAge.text = maxAge.toString();
     if (city.isNotEmpty) {
@@ -2262,12 +2565,16 @@ class _BrowseTabState extends State<BrowseTab> {
       _selectedProfession = profession;
     }
     if (_selectedReligion != null && _selectedReligion!.isNotEmpty) {
-      unawaited(_loadCasteOptions(_selectedReligion!, selectedValue: _selectedCaste));
+      unawaited(
+        _loadCasteOptions(_selectedReligion!, selectedValue: _selectedCaste),
+      );
     }
   }
 
   Map<String, dynamic> _partnerFiltersFromUser(Map<String, dynamic> user) {
-    final prefs = _asMap(user['partnerPreferences'] ?? user['partner_preferences']);
+    final prefs = _asMap(
+      user['partnerPreferences'] ?? user['partner_preferences'],
+    );
     final map = <String, dynamic>{};
     if (prefs['age_min'] != null) map['age_min'] = prefs['age_min'];
     if (prefs['age_max'] != null) map['age_max'] = prefs['age_max'];
@@ -2282,7 +2589,10 @@ class _BrowseTabState extends State<BrowseTab> {
     return map;
   }
 
-  Future<void> _loadCasteOptions(String religion, {String? selectedValue}) async {
+  Future<void> _loadCasteOptions(
+    String religion, {
+    String? selectedValue,
+  }) async {
     if (religion.trim().isEmpty) {
       setState(() {
         _availableCastes = const <String>[];
@@ -2292,20 +2602,23 @@ class _BrowseTabState extends State<BrowseTab> {
       return;
     }
     final dynamicCastes = await widget.api.castes(religion);
-    final staticCastes = _asList(_subCasteOptions.keys).map((item) => item.toString()).toList();
+    final staticCastes = _asList(
+      _subCasteOptions.keys,
+    ).map((item) => item.toString()).toList();
     final merged = <String>{
       ...dynamicCastes,
       ...staticCastes,
-      if ((selectedValue ?? _selectedCaste ?? '').trim().isNotEmpty) (selectedValue ?? _selectedCaste!).trim(),
-    }.toList()
-      ..sort();
+      if ((selectedValue ?? _selectedCaste ?? '').trim().isNotEmpty)
+        (selectedValue ?? _selectedCaste!).trim(),
+    }.toList()..sort();
     if (!mounted) return;
     setState(() {
       _availableCastes = merged;
       if (selectedValue != null && selectedValue.trim().isNotEmpty) {
         _selectedCaste = selectedValue.trim();
         _caste.text = selectedValue.trim();
-      } else if (_selectedCaste != null && !_availableCastes.contains(_selectedCaste)) {
+      } else if (_selectedCaste != null &&
+          !_availableCastes.contains(_selectedCaste)) {
         _selectedCaste = null;
         _caste.clear();
       }
@@ -2316,15 +2629,25 @@ class _BrowseTabState extends State<BrowseTab> {
     setState(() => _loading = true);
     try {
       final filters = <String, dynamic>{'page': 1, 'limit': 20};
-      if (_minAge.text.trim().isNotEmpty) filters['age_min'] = int.tryParse(_minAge.text.trim());
-      if (_maxAge.text.trim().isNotEmpty) filters['age_max'] = int.tryParse(_maxAge.text.trim());
-      if (_selectedCity?.trim().isNotEmpty == true) filters['location'] = _selectedCity!.trim();
-      if (_selectedReligion?.trim().isNotEmpty == true) filters['religion'] = _selectedReligion!.trim();
-      if (_selectedCaste?.trim().isNotEmpty == true) filters['caste'] = _selectedCaste!.trim();
-      if (_selectedProfession?.trim().isNotEmpty == true) filters['profession'] = _selectedProfession!.trim();
+      if (_minAge.text.trim().isNotEmpty)
+        filters['age_min'] = int.tryParse(_minAge.text.trim());
+      if (_maxAge.text.trim().isNotEmpty)
+        filters['age_max'] = int.tryParse(_maxAge.text.trim());
+      if (_selectedCity?.trim().isNotEmpty == true)
+        filters['location'] = _selectedCity!.trim();
+      if (_selectedReligion?.trim().isNotEmpty == true)
+        filters['religion'] = _selectedReligion!.trim();
+      if (_selectedCaste?.trim().isNotEmpty == true)
+        filters['caste'] = _selectedCaste!.trim();
+      if (_selectedProfession?.trim().isNotEmpty == true)
+        filters['profession'] = _selectedProfession!.trim();
       final data = await widget.api.matches(widget.token, filters);
       if (!mounted) return;
-      setState(() => _matches = List<dynamic>.from(data['matches'] as List? ?? <dynamic>[]));
+      setState(
+        () => _matches = List<dynamic>.from(
+          data['matches'] as List? ?? <dynamic>[],
+        ),
+      );
     } catch (e) {
       _toast(e);
     } finally {
@@ -2334,14 +2657,16 @@ class _BrowseTabState extends State<BrowseTab> {
 
   Future<void> _connect(String id) async {
     try {
-      await widget.api.sendRequest(widget.token, id);
+      final response = await widget.api.sendRequest(widget.token, id);
       if (mounted) {
         setState(() {
           _matches = _matches.map((item) {
             final map = _asMap(item);
             if (map['id']?.toString() == id) {
-              map['requestSent'] = true;
-              map['request_sent'] = true;
+              _applyRelationshipStatus(
+                map,
+                response['relationshipStatus']?.toString() ?? 'REQUEST_SENT',
+              );
             }
             return map;
           }).toList();
@@ -2356,7 +2681,9 @@ class _BrowseTabState extends State<BrowseTab> {
 
   void _toast(Object message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message.toString().replaceFirst('Exception: ', ''))),
+      SnackBar(
+        content: Text(message.toString().replaceFirst('Exception: ', '')),
+      ),
     );
   }
 
@@ -2386,7 +2713,10 @@ class _BrowseTabState extends State<BrowseTab> {
                     if (widget.showBackButton)
                       IconButton(
                         onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+                        icon: const Icon(
+                          Icons.arrow_back_rounded,
+                          color: Colors.white,
+                        ),
                       ),
                     Expanded(
                       child: Column(
@@ -2394,27 +2724,44 @@ class _BrowseTabState extends State<BrowseTab> {
                         children: [
                           const Text(
                             'Find Your Match',
-                            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: Colors.white),
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             '${_matches.length} profiles available',
-                            style: const TextStyle(fontSize: 12, color: Colors.white70),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.white70,
+                            ),
                           ),
                         ],
                       ),
                     ),
                     OutlinedButton.icon(
-                      onPressed: () => setState(() => _showFilters = !_showFilters),
-                      icon: const Icon(Icons.filter_list, color: Colors.white, size: 20),
+                      onPressed: () =>
+                          setState(() => _showFilters = !_showFilters),
+                      icon: const Icon(
+                        Icons.filter_list,
+                        color: Colors.white,
+                        size: 20,
+                      ),
                       label: Text(
                         _showFilters ? 'Hide' : 'Filters',
-                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       style: OutlinedButton.styleFrom(
                         backgroundColor: Colors.white.withValues(alpha: 0.15),
                         side: const BorderSide(color: Colors.white24),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
                     ),
                   ],
@@ -2460,7 +2807,10 @@ class _BrowseTabState extends State<BrowseTab> {
                           child: _DropdownField(
                             label: 'City/State',
                             value: _selectedCity,
-                            options: _mergeDropdownOptions(_stateOptions, _selectedCity),
+                            options: _mergeDropdownOptions(
+                              _stateOptions,
+                              _selectedCity,
+                            ),
                             hint: 'Select state',
                             onChanged: (value) {
                               setState(() {
@@ -2475,7 +2825,10 @@ class _BrowseTabState extends State<BrowseTab> {
                           child: _DropdownField(
                             label: 'Religion',
                             value: _selectedReligion,
-                            options: _mergeDropdownOptions(_religionOptions, _selectedReligion),
+                            options: _mergeDropdownOptions(
+                              _religionOptions,
+                              _selectedReligion,
+                            ),
                             hint: 'Select religion',
                             onChanged: (value) {
                               setState(() {
@@ -2497,8 +2850,13 @@ class _BrowseTabState extends State<BrowseTab> {
                           child: _DropdownField(
                             label: 'Caste',
                             value: _selectedCaste,
-                            options: _mergeDropdownOptions(_availableCastes, _selectedCaste),
-                            hint: _selectedReligion == null ? 'Select religion first' : 'Select caste',
+                            options: _mergeDropdownOptions(
+                              _availableCastes,
+                              _selectedCaste,
+                            ),
+                            hint: _selectedReligion == null
+                                ? 'Select religion first'
+                                : 'Select caste',
                             onChanged: (value) {
                               setState(() {
                                 _selectedCaste = value;
@@ -2512,7 +2870,10 @@ class _BrowseTabState extends State<BrowseTab> {
                           child: _DropdownField(
                             label: 'Profession',
                             value: _selectedProfession,
-                            options: _mergeDropdownOptions(_professionOptions, _selectedProfession),
+                            options: _mergeDropdownOptions(
+                              _professionOptions,
+                              _selectedProfession,
+                            ),
                             hint: 'Profession',
                             onChanged: (value) {
                               setState(() {
@@ -2532,7 +2893,9 @@ class _BrowseTabState extends State<BrowseTab> {
                             onPressed: _loading ? null : _load,
                             style: FilledButton.styleFrom(
                               backgroundColor: const Color(0xFF8B0000),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                               padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
                             child: const Text('Apply Filters'),
@@ -2559,11 +2922,19 @@ class _BrowseTabState extends State<BrowseTab> {
                               setState(() => _showFilters = false);
                             },
                             style: OutlinedButton.styleFrom(
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                               side: const BorderSide(color: Color(0xFFE8DCC8)),
                               padding: const EdgeInsets.symmetric(vertical: 14),
                             ),
-                            child: const Text('Clear All', style: TextStyle(color: _textColor, fontWeight: FontWeight.w600)),
+                            child: const Text(
+                              'Clear All',
+                              style: TextStyle(
+                                color: _textColor,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -2576,128 +2947,199 @@ class _BrowseTabState extends State<BrowseTab> {
               child: _loading && _matches.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : _matches.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 120),
-                          child: Column(
-                            children: [
-                              Icon(Icons.search, size: 64, color: _textSecondaryColor),
-                              SizedBox(height: 24),
-                              Text(
-                                'No matches found. Try adjusting your filters.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 16, color: _textSecondaryColor),
-                              ),
-                            ],
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 120),
+                      child: Column(
+                        children: [
+                          Icon(
+                            Icons.search,
+                            size: 64,
+                            color: _textSecondaryColor,
                           ),
-                        )
-                      : Column(
-                          children: _matches.map((item) {
-                            final p = Map<String, dynamic>.from(item as Map);
-                            return GestureDetector(
-                              onTap: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => MatchProfilePage(
-                                      api: widget.api,
-                                      token: widget.token,
-                                      user: widget.user,
-                                      profileId: p['id']?.toString() ?? '',
-                                      initialProfile: p,
-                                    ),
-                                  ),
-                                );
-                              },
-                              child: Container(
-                                margin: const EdgeInsets.only(bottom: 16),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: const Color(0xFFE8DCC8)),
+                          SizedBox(height: 24),
+                          Text(
+                            'No matches found. Try adjusting your filters.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: _textSecondaryColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : Column(
+                      children: _matches.map((item) {
+                        final p = Map<String, dynamic>.from(item as Map);
+                        return GestureDetector(
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute<void>(
+                                builder: (_) => MatchProfilePage(
+                                  api: widget.api,
+                                  token: widget.token,
+                                  user: widget.user,
+                                  profileId: p['id']?.toString() ?? '',
+                                  initialProfile: p,
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                              ),
+                            );
+                          },
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFFE8DCC8),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Stack(
                                   children: [
-                                    Stack(
-                                      children: [
-                                        Container(
-                                          height: 260,
-                                          width: double.infinity,
-                                          decoration: const BoxDecoration(
-                                            color: Color(0xFFFFF0F0),
-                                            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                                    Container(
+                                      height: 260,
+                                      width: double.infinity,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFFFFF0F0),
+                                        borderRadius: BorderRadius.vertical(
+                                          top: Radius.circular(16),
+                                        ),
+                                      ),
+                                      child: _CoverPhoto(
+                                        profile: p,
+                                        height: 260,
+                                        radius: const BorderRadius.vertical(
+                                          top: Radius.circular(16),
+                                        ),
+                                      ),
+                                    ),
+                                    if (p['requestSent'] == true ||
+                                        p['alreadyConnected'] == true)
+                                      Positioned(
+                                        top: 16,
+                                        right: 16,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 16,
+                                            vertical: 4,
                                           ),
-                                          child: _CoverPhoto(
-                                            profile: p,
-                                            height: 260,
-                                            radius: const BorderRadius.vertical(top: Radius.circular(16)),
+                                          decoration: BoxDecoration(
+                                            color: p['alreadyConnected'] == true
+                                                ? Colors.green
+                                                : const Color(0xFFFFD700),
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: Text(
+                                            p['alreadyConnected'] == true
+                                                ? 'Connected'
+                                                : 'Request Sent',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                              color: Color(0xFF333333),
+                                            ),
                                           ),
                                         ),
-                                        if (p['requestSent'] == true || p['alreadyConnected'] == true)
-                                          Positioned(
-                                            top: 16,
-                                            right: 16,
-                                            child: Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                                              decoration: BoxDecoration(
-                                                color: p['alreadyConnected'] == true ? Colors.green : const Color(0xFFFFD700),
-                                                borderRadius: BorderRadius.circular(12),
-                                              ),
-                                              child: Text(
-                                                p['alreadyConnected'] == true ? 'Connected' : 'Request Sent',
-                                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF333333)),
+                                      ),
+                                  ],
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.all(24),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              p['name']?.toString() ?? 'User',
+                                              style: const TextStyle(
+                                                fontSize: 20,
+                                                fontWeight: FontWeight.w700,
+                                                color: Color(0xFF4A2C0A),
                                               ),
                                             ),
                                           ),
-                                      ],
-                                    ),
-                                    Padding(
-                                      padding: const EdgeInsets.all(24),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              Expanded(
-                                                child: Text(
-                                                  p['name']?.toString() ?? 'User',
-                                                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A)),
-                                                ),
-                                              ),
-                                              if (p['age'] != null)
-                                                Text(
-                                                  '${p['age']} yrs',
-                                                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _textSecondaryColor),
-                                                ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 8),
-                                          _MiniDetail(icon: Icons.location_on_outlined, text: p['city']?.toString().isNotEmpty == true ? p['city'].toString() : 'N/A'),
-                                          _MiniDetail(icon: Icons.work_outline, text: p['occupation']?.toString().isNotEmpty == true ? p['occupation'].toString() : 'N/A'),
-                                          if ((p['religion']?.toString() ?? '').isNotEmpty)
-                                            _MiniDetail(icon: Icons.favorite_border, text: p['religion'].toString()),
-                                          if (p['requestSent'] != true && p['alreadyConnected'] != true && p['requestReceived'] != true)
-                                            Padding(
-                                              padding: const EdgeInsets.only(top: 16),
-                                              child: FilledButton.icon(
-                                                onPressed: () => _connect(p['id']?.toString() ?? ''),
-                                                style: FilledButton.styleFrom(
-                                                  backgroundColor: const Color(0xFF8B0000),
-                                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                                  minimumSize: const Size.fromHeight(42),
-                                                ),
-                                                icon: const Icon(Icons.favorite, size: 18),
-                                                label: const Text('Connect'),
+                                          if (p['age'] != null)
+                                            Text(
+                                              '${p['age']} yrs',
+                                              style: const TextStyle(
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w600,
+                                                color: _textSecondaryColor,
                                               ),
                                             ),
                                         ],
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(height: 8),
+                                      _MiniDetail(
+                                        icon: Icons.location_on_outlined,
+                                        text:
+                                            p['city']?.toString().isNotEmpty ==
+                                                true
+                                            ? p['city'].toString()
+                                            : 'N/A',
+                                      ),
+                                      _MiniDetail(
+                                        icon: Icons.work_outline,
+                                        text:
+                                            p['occupation']
+                                                    ?.toString()
+                                                    .isNotEmpty ==
+                                                true
+                                            ? p['occupation'].toString()
+                                            : 'N/A',
+                                      ),
+                                      if ((p['religion']?.toString() ?? '')
+                                          .isNotEmpty)
+                                        _MiniDetail(
+                                          icon: Icons.favorite_border,
+                                          text: p['religion'].toString(),
+                                        ),
+                                      if (p['requestSent'] != true &&
+                                          p['alreadyConnected'] != true &&
+                                          p['requestReceived'] != true)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 16,
+                                          ),
+                                          child: FilledButton.icon(
+                                            onPressed: () => _connect(
+                                              p['id']?.toString() ?? '',
+                                            ),
+                                            style: FilledButton.styleFrom(
+                                              backgroundColor: const Color(
+                                                0xFF8B0000,
+                                              ),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              minimumSize:
+                                                  const Size.fromHeight(42),
+                                            ),
+                                            icon: const Icon(
+                                              Icons.favorite,
+                                              size: 18,
+                                            ),
+                                            label: const Text('Connect'),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            );
-                          }).toList(),
-                        ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
             ),
           ],
         ),
@@ -2707,7 +3149,12 @@ class _BrowseTabState extends State<BrowseTab> {
 }
 
 class ConnectionsTab extends StatefulWidget {
-  const ConnectionsTab({super.key, required this.api, required this.token, required this.user});
+  const ConnectionsTab({
+    super.key,
+    required this.api,
+    required this.token,
+    required this.user,
+  });
 
   final ApiClient api;
   final String token;
@@ -2717,7 +3164,8 @@ class ConnectionsTab extends StatefulWidget {
   State<ConnectionsTab> createState() => _ConnectionsTabState();
 }
 
-class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProviderStateMixin {
+class _ConnectionsTabState extends State<ConnectionsTab>
+    with SingleTickerProviderStateMixin {
   late final TabController _tabs;
   bool _loading = true;
   Map<String, dynamic> _data = {};
@@ -2763,15 +3211,23 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
 
   void _toast(Object message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message.toString().replaceFirst('Exception: ', ''))),
+      SnackBar(
+        content: Text(message.toString().replaceFirst('Exception: ', '')),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final received = List<dynamic>.from(_data['pendingReceived'] as List? ?? <dynamic>[]);
-    final active = List<dynamic>.from(_data['connections'] as List? ?? <dynamic>[]);
-    final sent = List<dynamic>.from(_data['pendingSent'] as List? ?? <dynamic>[]);
+    final received = List<dynamic>.from(
+      _data['pendingReceived'] as List? ?? <dynamic>[],
+    );
+    final active = List<dynamic>.from(
+      _data['connections'] as List? ?? <dynamic>[],
+    );
+    final sent = List<dynamic>.from(
+      _data['pendingSent'] as List? ?? <dynamic>[],
+    );
     final max = (_data['max'] as num?)?.toInt() ?? 5;
     final count = (_data['count'] as num?)?.toInt() ?? active.length;
     return Scaffold(
@@ -2799,7 +3255,11 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                   Expanded(
                     child: Text(
                       'Your connections: $count/$max active',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ],
@@ -2819,7 +3279,10 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
               unselectedLabelColor: _textSecondaryColor,
               indicatorColor: _primaryColor,
               dividerColor: Colors.transparent,
-              labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              labelStyle: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
               tabs: [
                 Tab(text: 'Received (${received.length})'),
                 Tab(text: 'Active (${active.length})'),
@@ -2841,7 +3304,9 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                       final p = Map<String, dynamic>.from(item as Map);
                       return _ConnectionCard(
                         name: p['name']?.toString() ?? 'User',
-                        detail1: p['age'] != null ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}' : (p['city']?.toString() ?? ''),
+                        detail1: p['age'] != null
+                            ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
+                            : (p['city']?.toString() ?? ''),
                         detail2: p['occupation']?.toString() ?? '',
                         onTap: () {
                           Navigator.of(context).push(
@@ -2863,7 +3328,10 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                               icon: Icons.check,
                               background: Colors.green,
                               onTap: () => _run(
-                                () => widget.api.acceptRequest(widget.token, p['id']?.toString() ?? ''),
+                                () => widget.api.acceptRequest(
+                                  widget.token,
+                                  p['id']?.toString() ?? '',
+                                ),
                                 'Connection accepted',
                               ),
                             ),
@@ -2872,7 +3340,10 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                               icon: Icons.close,
                               background: Colors.red,
                               onTap: () => _run(
-                                () => widget.api.rejectRequest(widget.token, p['id']?.toString() ?? ''),
+                                () => widget.api.rejectRequest(
+                                  widget.token,
+                                  p['id']?.toString() ?? '',
+                                ),
                                 'Request rejected',
                               ),
                             ),
@@ -2888,10 +3359,16 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                     builder: (item) {
                       final p = Map<String, dynamic>.from(item as Map);
                       final expiresAt = p['expiresAt']?.toString();
-                      final daysLeft = expiresAt == null ? null : DateTime.tryParse(expiresAt)?.difference(DateTime.now()).inDays;
+                      final daysLeft = expiresAt == null
+                          ? null
+                          : DateTime.tryParse(
+                              expiresAt,
+                            )?.difference(DateTime.now()).inDays;
                       return _ConnectionCard(
                         name: p['name']?.toString() ?? 'User',
-                        detail1: p['age'] != null ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}' : (p['city']?.toString() ?? ''),
+                        detail1: p['age'] != null
+                            ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
+                            : (p['city']?.toString() ?? ''),
                         detail2: p['occupation']?.toString() ?? '',
                         onTap: () {
                           Navigator.of(context).push(
@@ -2908,7 +3385,9 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                         },
                         badge: daysLeft == null
                             ? null
-                            : _TimerBadge(daysLeft: daysLeft < 0 ? 0 : daysLeft + 1),
+                            : _TimerBadge(
+                                daysLeft: daysLeft < 0 ? 0 : daysLeft + 1,
+                              ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -2935,7 +3414,10 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                               background: _surfaceColor,
                               iconColor: Colors.red,
                               onTap: () => _run(
-                                () => widget.api.removeConnection(widget.token, p['id']?.toString() ?? ''),
+                                () => widget.api.removeConnection(
+                                  widget.token,
+                                  p['id']?.toString() ?? '',
+                                ),
                                 'Connection removed',
                               ),
                             ),
@@ -2952,7 +3434,9 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                       final p = Map<String, dynamic>.from(item as Map);
                       return _ConnectionCard(
                         name: p['name']?.toString() ?? 'User',
-                        detail1: p['age'] != null ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}' : (p['city']?.toString() ?? ''),
+                        detail1: p['age'] != null
+                            ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
+                            : (p['city']?.toString() ?? ''),
                         detail2: p['occupation']?.toString() ?? '',
                         onTap: () {
                           Navigator.of(context).push(
@@ -2969,10 +3453,19 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
                         },
                         trailing: TextButton(
                           onPressed: () => _run(
-                            () => widget.api.cancelRequest(widget.token, p['id']?.toString() ?? ''),
+                            () => widget.api.cancelRequest(
+                              widget.token,
+                              p['id']?.toString() ?? '',
+                            ),
                             'Request cancelled',
                           ),
-                          child: const Text('Cancel', style: TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
+                          child: const Text(
+                            'Cancel',
+                            style: TextStyle(
+                              color: Colors.red,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
                       );
                     },
@@ -2988,7 +3481,12 @@ class _ConnectionsTabState extends State<ConnectionsTab> with SingleTickerProvid
 }
 
 class MessagesTab extends StatefulWidget {
-  const MessagesTab({super.key, required this.api, required this.token, required this.user});
+  const MessagesTab({
+    super.key,
+    required this.api,
+    required this.token,
+    required this.user,
+  });
 
   final ApiClient api;
   final String token;
@@ -3014,31 +3512,40 @@ class _MessagesTabState extends State<MessagesTab> {
     setState(() => _loading = true);
     try {
       final data = await widget.api.connections(widget.token);
-      final connections = List<dynamic>.from(data['connections'] as List? ?? <dynamic>[]);
+      final connections = List<dynamic>.from(
+        data['connections'] as List? ?? <dynamic>[],
+      );
       final myId = widget.user['id']?.toString() ?? '';
       final unreadByPartner = <String, int>{};
       final lastByPartner = <String, ChatMessage>{};
-      await Future.wait(connections.map((rawProfile) async {
-        final profile = _asMap(rawProfile);
-        final partnerId = profile['id']?.toString() ?? '';
-        if (partnerId.isEmpty) return;
-        try {
-          final messages = await widget.api.messages(widget.token, partnerId);
-          final normalized = messages.map((item) => ChatMessage.fromMap(_asMap(item))).toList()
-            ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-          if (normalized.isNotEmpty) {
-            lastByPartner[partnerId] = normalized.last;
-            unreadByPartner[partnerId] = normalized
-                .where((message) =>
-                    message.senderId == partnerId &&
-                    message.receiverId == myId &&
-                    !message.read)
-                .length;
+      await Future.wait(
+        connections.map((rawProfile) async {
+          final profile = _asMap(rawProfile);
+          final partnerId = profile['id']?.toString() ?? '';
+          if (partnerId.isEmpty) return;
+          try {
+            final messages = await widget.api.messages(widget.token, partnerId);
+            final normalized =
+                messages
+                    .map((item) => ChatMessage.fromMap(_asMap(item)))
+                    .toList()
+                  ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+            if (normalized.isNotEmpty) {
+              lastByPartner[partnerId] = normalized.last;
+              unreadByPartner[partnerId] = normalized
+                  .where(
+                    (message) =>
+                        message.senderId == partnerId &&
+                        message.receiverId == myId &&
+                        !message.read,
+                  )
+                  .length;
+            }
+          } catch (_) {
+            // Keep list rendering even if one thread fetch fails.
           }
-        } catch (_) {
-          // Keep list rendering even if one thread fetch fails.
-        }
-      }));
+        }),
+      );
       if (!mounted) return;
       setState(() {
         _connections = connections;
@@ -3059,93 +3566,111 @@ class _MessagesTabState extends State<MessagesTab> {
         child: _loading && _connections.isEmpty
             ? const Center(child: CircularProgressIndicator())
             : _connections.isEmpty
-                ? ListView(
-                    children: const [
-                      SizedBox(height: 180),
-                      Icon(Icons.chat_bubble_outline, size: 64, color: _textSecondaryColor),
-                      SizedBox(height: 24),
-                      Text(
-                        'No messages yet',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textColor),
+            ? ListView(
+                children: const [
+                  SizedBox(height: 180),
+                  Icon(
+                    Icons.chat_bubble_outline,
+                    size: 64,
+                    color: _textSecondaryColor,
+                  ),
+                  SizedBox(height: 24),
+                  Text(
+                    'No messages yet',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: _textColor,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Connect with someone to start chatting',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.all(16),
+                itemCount: _connections.length,
+                itemBuilder: (_, index) {
+                  final p = Map<String, dynamic>.from(
+                    _connections[index] as Map,
+                  );
+                  final partnerId = p['id']?.toString() ?? '';
+                  final unread = _unreadByPartner[partnerId] ?? 0;
+                  final lastMessage = _lastMessageByPartner[partnerId];
+                  final myId = widget.user['id']?.toString() ?? '';
+                  final preview = lastMessage == null
+                      ? _personSummary(p)
+                      : '${lastMessage.senderId == myId ? 'You: ' : ''}${lastMessage.content}';
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: unread > 0
+                            ? _primaryColor.withValues(alpha: 0.35)
+                            : _borderColor,
                       ),
-                      SizedBox(height: 4),
-                      Text(
-                        'Connect with someone to start chatting',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                    ),
+                    child: ListTile(
+                      leading: _CircularProfileAvatar(profile: p, size: 54),
+                      title: Text(p['name']?.toString() ?? 'User'),
+                      subtitle: Text(
+                        preview,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ],
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: _connections.length,
-                    itemBuilder: (_, index) {
-                      final p = Map<String, dynamic>.from(_connections[index] as Map);
-                      final partnerId = p['id']?.toString() ?? '';
-                      final unread = _unreadByPartner[partnerId] ?? 0;
-                      final lastMessage = _lastMessageByPartner[partnerId];
-                      final myId = widget.user['id']?.toString() ?? '';
-                      final preview = lastMessage == null
-                          ? _personSummary(p)
-                          : '${lastMessage.senderId == myId ? 'You: ' : ''}${lastMessage.content}';
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: unread > 0 ? _primaryColor.withValues(alpha: 0.35) : _borderColor,
-                          ),
-                        ),
-                        child: ListTile(
-                          leading: _CircularProfileAvatar(profile: p, size: 54),
-                          title: Text(p['name']?.toString() ?? 'User'),
-                          subtitle: Text(
-                            preview,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (unread > 0)
-                                Container(
-                                  margin: const EdgeInsets.only(right: 8),
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: _primaryColor,
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: Text(
-                                    unread > 99 ? '99+' : unread.toString(),
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                              const Icon(Icons.chevron_right, color: _textSecondaryColor),
-                            ],
-                          ),
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => ChatPage(
-                                  api: widget.api,
-                                  token: widget.token,
-                                  currentUser: widget.user,
-                                  partner: p,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (unread > 0)
+                            Container(
+                              margin: const EdgeInsets.only(right: 8),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _primaryColor,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                unread > 99 ? '99+' : unread.toString(),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                            );
-                            unawaited(_load());
-                          },
-                        ),
-                      );
-                    },
-                  ),
+                            ),
+                          const Icon(
+                            Icons.chevron_right,
+                            color: _textSecondaryColor,
+                          ),
+                        ],
+                      ),
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => ChatPage(
+                              api: widget.api,
+                              token: widget.token,
+                              currentUser: widget.user,
+                              partner: p,
+                            ),
+                          ),
+                        );
+                        unawaited(_load());
+                      },
+                    ),
+                  );
+                },
+              ),
       ),
     );
   }
@@ -3225,16 +3750,26 @@ class _ProfileTabState extends State<ProfileTab> {
                     const SizedBox(height: 16),
                     Text(
                       profile['name']?.toString() ?? 'User',
-                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Colors.white),
+                      style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       profile['email']?.toString() ?? '',
-                      style: const TextStyle(fontSize: 14, color: Colors.white70),
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.white70,
+                      ),
                     ),
                     const SizedBox(height: 10),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.16),
                         borderRadius: BorderRadius.circular(999),
@@ -3242,22 +3777,27 @@ class _ProfileTabState extends State<ProfileTab> {
                       ),
                       child: Text(
                         'Plan: ${(profile['plan']?.toString() ?? 'free').toUpperCase()}',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Colors.white),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 16),
                     FilledButton(
                       onPressed: () async {
-                        final updated = await Navigator.of(context).push<Map<String, dynamic>>(
-                          MaterialPageRoute<Map<String, dynamic>>(
-                            builder: (_) => EditProfilePage(
-                              api: widget.api,
-                              token: widget.token,
-                              initialProfile: profile,
-                              onProfileSaved: widget.onUserChanged,
-                            ),
-                          ),
-                        );
+                        final updated = await Navigator.of(context)
+                            .push<Map<String, dynamic>>(
+                              MaterialPageRoute<Map<String, dynamic>>(
+                                builder: (_) => EditProfilePage(
+                                  api: widget.api,
+                                  token: widget.token,
+                                  initialProfile: profile,
+                                  onProfileSaved: widget.onUserChanged,
+                                ),
+                              ),
+                            );
                         if (updated != null) {
                           setState(() => _profile = updated);
                           await widget.onUserChanged(updated);
@@ -3265,9 +3805,14 @@ class _ProfileTabState extends State<ProfileTab> {
                       },
                       style: FilledButton.styleFrom(
                         backgroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(20),
+                        ),
                       ),
-                      child: const Text('Edit Profile', style: TextStyle(color: _shaadiMaroon)),
+                      child: const Text(
+                        'Edit Profile',
+                        style: TextStyle(color: _shaadiMaroon),
+                      ),
                     ),
                   ],
                 ),
@@ -3306,10 +3851,8 @@ class _ProfileTabState extends State<ProfileTab> {
                     label: 'Settings',
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute<void>(
-                        builder: (_) => SettingsPage(
-                          api: widget.api,
-                          token: widget.token,
-                        ),
+                        builder: (_) =>
+                            SettingsPage(api: widget.api, token: widget.token),
                       ),
                     ),
                   ),
@@ -3338,7 +3881,9 @@ class _ProfileTabState extends State<ProfileTab> {
                     icon: Icons.info,
                     label: 'About',
                     onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(builder: (_) => const AboutPage()),
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AboutPage(),
+                      ),
                     ),
                     showBorder: false,
                   ),
@@ -3351,12 +3896,18 @@ class _ProfileTabState extends State<ProfileTab> {
               style: TextButton.styleFrom(
                 backgroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 18),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               icon: const Icon(Icons.logout, color: Colors.red),
               label: const Text(
                 'Sign Out',
-                style: TextStyle(fontSize: 16, color: Colors.red, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.red,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
             if (_loading)
@@ -3419,17 +3970,24 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
 
   Future<void> _connect() async {
     try {
-      await widget.api.sendRequest(widget.token, widget.profileId);
+      final response = await widget.api.sendRequest(
+        widget.token,
+        widget.profileId,
+      );
       if (!mounted) return;
       setState(() {
         _requestSentLocally = true;
         final profile = _profile ?? <String, dynamic>{};
-        profile['requestSent'] = true;
-        profile['request_sent'] = true;
+        _applyRelationshipStatus(
+          profile,
+          response['relationshipStatus']?.toString() ?? 'REQUEST_SENT',
+        );
         _profile = profile;
       });
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Connection request sent')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Connection request sent')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3441,176 +3999,287 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
   @override
   Widget build(BuildContext context) {
     final p = _profile;
-    final connectedIds = List<dynamic>.from(widget.user['connections'] as List? ?? const <dynamic>[])
-        .map((id) => id.toString())
-        .toSet();
-    final isConnected = p?['alreadyConnected'] == true || connectedIds.contains(widget.profileId);
-    final requestSent = _requestSentLocally || p?['requestSent'] == true || p?['request_sent'] == true;
-    final isPaid = (widget.user['plan']?.toString().toLowerCase() ?? 'free') != 'free';
+    final connectedIds = List<dynamic>.from(
+      widget.user['connections'] as List? ?? const <dynamic>[],
+    ).map((id) => id.toString()).toSet();
+    final isConnected =
+        (p != null && _alreadyConnectedFlag(p)) ||
+        connectedIds.contains(widget.profileId);
+    final requestSent =
+        _requestSentLocally || (p != null && _requestSentFlag(p));
+    final isPaid =
+        (widget.user['plan']?.toString().toLowerCase() ?? 'free') != 'free';
     final canSeeContact = isPaid && isConnected;
-    final photoVisible = (p?['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
+    final photoVisible =
+        (p?['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
     final allPhotos = p == null ? <String>[] : _photoUrls(p);
-    final galleryPhotos = allPhotos.length > 1 ? allPhotos.skip(1).toList() : <String>[];
+    final galleryPhotos = allPhotos.length > 1
+        ? allPhotos.skip(1).toList()
+        : <String>[];
     return Scaffold(
       backgroundColor: _postLoginBackground,
       body: _loading && _profile == null
           ? const Center(child: CircularProgressIndicator())
           : p == null
-              ? const Center(child: Text('Profile not found'))
-              : Stack(
+          ? const Center(child: Text('Profile not found'))
+          : Stack(
+              children: [
+                ListView(
+                  padding: EdgeInsets.zero,
                   children: [
-                    ListView(
-                      padding: EdgeInsets.zero,
-                      children: [
-                        Container(
-                          height: 400,
-                          color: const Color(0xFFFFF0F0),
-                          child: _CoverPhoto(profile: p, height: 400),
-                        ),
-                        Container(
-                          margin: const EdgeInsets.all(16),
-                          padding: const EdgeInsets.all(24),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFE8DCC8)),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                p['name']?.toString() ?? 'User',
-                                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A)),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${p['age'] != null ? '${p['age']} yrs' : ''}${(p['height']?.toString() ?? '').isNotEmpty ? ' | ${p['height']}' : ''}${(p['maritalStatus']?.toString() ?? '').isNotEmpty ? ' | ${p['maritalStatus']}' : ''}',
-                                style: const TextStyle(fontSize: 14, color: _textSecondaryColor),
-                              ),
-                              const SizedBox(height: 16),
-                              _ProfileDetailRow(icon: Icons.location_on, label: 'Location', value: '${p['city'] ?? ''} ${p['state'] ?? ''}'.trim().isEmpty ? 'N/A' : '${p['city'] ?? ''} ${p['state'] ?? ''}'.trim()),
-                              _ProfileDetailRow(icon: Icons.favorite, label: 'Religion', value: '${p['religion'] ?? 'N/A'} ${(p['caste']?.toString() ?? '').isNotEmpty ? '- ${p['caste']}' : ''}'.trim()),
-                              _ProfileDetailRow(icon: Icons.school, label: 'Education', value: p['education']?.toString() ?? 'N/A'),
-                              _ProfileDetailRow(icon: Icons.work, label: 'Occupation', value: p['occupation']?.toString() ?? 'N/A'),
-                              _ProfileDetailRow(icon: Icons.payments, label: 'Income', value: p['income']?.toString() ?? 'N/A'),
-                              _ProfileDetailRow(icon: Icons.language, label: 'Mother Tongue', value: p['motherTongue']?.toString() ?? 'N/A'),
-                            ],
-                          ),
-                        ),
-                        if ((p['about']?.toString() ?? '').isNotEmpty)
-                          _CreamCard(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('About', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A))),
-                                const SizedBox(height: 16),
-                                Text(p['about'].toString(), style: const TextStyle(fontSize: 14, color: _textColor, height: 1.5)),
-                              ],
+                    Container(
+                      height: 400,
+                      color: const Color(0xFFFFF0F0),
+                      child: _CoverPhoto(profile: p, height: 400),
+                    ),
+                    Container(
+                      margin: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE8DCC8)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            p['name']?.toString() ?? 'User',
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF4A2C0A),
                             ),
                           ),
-                        if ((p['familyDetails']?.toString() ?? '').isNotEmpty)
-                          _CreamCard(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('Family', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A))),
-                                const SizedBox(height: 16),
-                                Text(p['familyDetails'].toString(), style: const TextStyle(fontSize: 14, color: _textColor, height: 1.5)),
-                              ],
+                          const SizedBox(height: 4),
+                          Text(
+                            '${p['age'] != null ? '${p['age']} yrs' : ''}${(p['height']?.toString() ?? '').isNotEmpty ? ' | ${p['height']}' : ''}${(p['maritalStatus']?.toString() ?? '').isNotEmpty ? ' | ${p['maritalStatus']}' : ''}',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: _textSecondaryColor,
                             ),
                           ),
-                        if (galleryPhotos.isNotEmpty)
-                          _CreamCard(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('More Photos', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A))),
-                                const SizedBox(height: 16),
-                                if (isConnected && isPaid && photoVisible)
-                                  SizedBox(
-                                    height: 94,
-                                    child: ListView.separated(
-                                      scrollDirection: Axis.horizontal,
-                                      itemCount: galleryPhotos.length,
-                                      separatorBuilder: (_, __) => const SizedBox(width: 12),
-                                      itemBuilder: (_, index) => ClipRRect(
-                                        borderRadius: BorderRadius.circular(14),
-                                        child: _SmartImage(
-                                          source: galleryPhotos[index],
-                                          width: 94,
-                                          height: 94,
-                                          fit: BoxFit.cover,
-                                          fallback: () => Container(
-                                            width: 94,
-                                            height: 94,
-                                            color: const Color(0xFFFFF0F0),
-                                            child: const Icon(Icons.person, color: _borderColor),
-                                          ),
+                          const SizedBox(height: 16),
+                          _ProfileDetailRow(
+                            icon: Icons.location_on,
+                            label: 'Location',
+                            value:
+                                '${p['city'] ?? ''} ${p['state'] ?? ''}'
+                                    .trim()
+                                    .isEmpty
+                                ? 'N/A'
+                                : '${p['city'] ?? ''} ${p['state'] ?? ''}'
+                                      .trim(),
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.favorite,
+                            label: 'Religion',
+                            value:
+                                '${p['religion'] ?? 'N/A'} ${(p['caste']?.toString() ?? '').isNotEmpty ? '- ${p['caste']}' : ''}'
+                                    .trim(),
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.school,
+                            label: 'Education',
+                            value: p['education']?.toString() ?? 'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.work,
+                            label: 'Occupation',
+                            value: p['occupation']?.toString() ?? 'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.payments,
+                            label: 'Income',
+                            value: p['income']?.toString() ?? 'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.language,
+                            label: 'Mother Tongue',
+                            value: p['motherTongue']?.toString() ?? 'N/A',
+                          ),
+                        ],
+                      ),
+                    ),
+                    if ((p['about']?.toString() ?? '').isNotEmpty)
+                      _CreamCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'About',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF4A2C0A),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              p['about'].toString(),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: _textColor,
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if ((p['familyDetails']?.toString() ?? '').isNotEmpty)
+                      _CreamCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Family',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF4A2C0A),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              p['familyDetails'].toString(),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: _textColor,
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if (galleryPhotos.isNotEmpty)
+                      _CreamCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'More Photos',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF4A2C0A),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            if (isConnected && isPaid && photoVisible)
+                              SizedBox(
+                                height: 94,
+                                child: ListView.separated(
+                                  scrollDirection: Axis.horizontal,
+                                  itemCount: galleryPhotos.length,
+                                  separatorBuilder: (_, __) =>
+                                      const SizedBox(width: 12),
+                                  itemBuilder: (_, index) => ClipRRect(
+                                    borderRadius: BorderRadius.circular(14),
+                                    child: _SmartImage(
+                                      source: galleryPhotos[index],
+                                      width: 94,
+                                      height: 94,
+                                      fit: BoxFit.cover,
+                                      fallback: () => Container(
+                                        width: 94,
+                                        height: 94,
+                                        color: const Color(0xFFFFF0F0),
+                                        child: const Icon(
+                                          Icons.person,
+                                          color: _borderColor,
                                         ),
                                       ),
                                     ),
-                                  )
-                                else
-                                  const VSGatedContentCard(
-                                    title: 'More photos are subscriber-only',
-                                    subtitle: 'The main profile photo is visible. Upgrade after connecting to view additional photos if the user allows it.',
                                   ),
-                              ],
-                            ),
-                          ),
-                        _CreamCard(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text('Contact Details', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF4A2C0A))),
-                              const SizedBox(height: 16),
-                              if (canSeeContact) ...[
-                                _ProfileDetailRow(icon: Icons.email, label: 'Email', value: p['email']?.toString() ?? 'N/A'),
-                                _ProfileDetailRow(icon: Icons.call, label: 'Phone', value: p['phone']?.toString() ?? 'N/A'),
-                              ] else
-                                const VSGatedContentCard(
-                                  title: 'Upgrade to see contact details',
-                                  subtitle:
-                                      'Subscribe to Focus or Commit plan and get matched',
                                 ),
-                            ],
-                          ),
+                              )
+                            else
+                              const VSGatedContentCard(
+                                title: 'More photos are subscriber-only',
+                                subtitle:
+                                    'The main profile photo is visible. Upgrade after connecting to view additional photos if the user allows it.',
+                              ),
+                          ],
                         ),
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: FilledButton.icon(
-                            onPressed: (isConnected || requestSent) ? null : _connect,
-                            style: FilledButton.styleFrom(
-                              backgroundColor: const Color(0xFF8B0000),
-                              minimumSize: const Size.fromHeight(48),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    _CreamCard(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Contact Details',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF4A2C0A),
                             ),
-                            icon: const Icon(Icons.favorite, size: 20),
-                            label: Text(isConnected ? 'Already Connected' : requestSent ? 'Request Sent' : 'Send Connection Request'),
                           ),
-                        ),
-                        const SizedBox(height: 24),
-                      ],
+                          const SizedBox(height: 16),
+                          if (canSeeContact) ...[
+                            _ProfileDetailRow(
+                              icon: Icons.email,
+                              label: 'Email',
+                              value: p['email']?.toString() ?? 'N/A',
+                            ),
+                            _ProfileDetailRow(
+                              icon: Icons.call,
+                              label: 'Phone',
+                              value: p['phone']?.toString() ?? 'N/A',
+                            ),
+                          ] else
+                            const VSGatedContentCard(
+                              title: 'Upgrade to see contact details',
+                              subtitle:
+                                  'Subscribe to Focus or Commit plan and get matched',
+                            ),
+                        ],
+                      ),
                     ),
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Align(
-                          alignment: Alignment.topLeft,
-                          child: Material(
-                            color: Colors.white,
-                            shape: const CircleBorder(),
-                            elevation: 4,
-                            child: IconButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              icon: const Icon(Icons.arrow_back, color: _textColor),
-                            ),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: FilledButton.icon(
+                        onPressed: (isConnected || requestSent)
+                            ? null
+                            : _connect,
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFF8B0000),
+                          minimumSize: const Size.fromHeight(48),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
                           ),
+                        ),
+                        icon: const Icon(Icons.favorite, size: 20),
+                        label: Text(
+                          isConnected
+                              ? 'Already Connected'
+                              : requestSent
+                              ? 'Request Sent'
+                              : 'Send Connection Request',
                         ),
                       ),
                     ),
+                    const SizedBox(height: 24),
                   ],
                 ),
+                SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                      alignment: Alignment.topLeft,
+                      child: Material(
+                        color: Colors.white,
+                        shape: const CircleBorder(),
+                        elevation: 4,
+                        child: IconButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          icon: const Icon(Icons.arrow_back, color: _textColor),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -3695,10 +4364,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final text = raw?.toString().trim() ?? '';
     if (text.isEmpty) return null;
     if (text.contains(',')) {
-      final first = text.split(',').map((item) => item.trim()).firstWhere(
-            (item) => item.isNotEmpty,
-            orElse: () => '',
-          );
+      final first = text
+          .split(',')
+          .map((item) => item.trim())
+          .firstWhere((item) => item.isNotEmpty, orElse: () => '');
       return first.isEmpty ? null : first;
     }
     return text;
@@ -3712,41 +4381,86 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _dob = TextEditingController(text: p['dob']?.toString() ?? '');
     _city = TextEditingController(text: p['city']?.toString() ?? '');
     _education = TextEditingController(text: p['education']?.toString() ?? '');
-    _occupation = TextEditingController(text: p['occupation']?.toString() ?? '');
+    _occupation = TextEditingController(
+      text: p['occupation']?.toString() ?? '',
+    );
     _about = TextEditingController(text: p['about']?.toString() ?? '');
-    _familyDetails = TextEditingController(text: p['familyDetails']?.toString() ?? '');
+    _familyDetails = TextEditingController(
+      text: p['familyDetails']?.toString() ?? '',
+    );
     _phone = TextEditingController(text: p['phone']?.toString() ?? '');
     _religion = TextEditingController(text: p['religion']?.toString() ?? '');
     _height = TextEditingController(text: p['height']?.toString() ?? '');
     _income = TextEditingController(text: p['income']?.toString() ?? '');
     _caste = TextEditingController(text: p['caste']?.toString() ?? '');
     _subCaste = TextEditingController(
-      text: p['subCaste']?.toString() ?? p['sub_caste']?.toString() ?? p['subcast']?.toString() ?? '',
+      text:
+          p['subCaste']?.toString() ??
+          p['sub_caste']?.toString() ??
+          p['subcast']?.toString() ??
+          '',
     );
-    _motherTongue = TextEditingController(text: p['motherTongue']?.toString() ?? '');
-    _maritalStatus = TextEditingController(text: p['maritalStatus']?.toString() ?? '');
+    _motherTongue = TextEditingController(
+      text: p['motherTongue']?.toString() ?? '',
+    );
+    _maritalStatus = TextEditingController(
+      text: p['maritalStatus']?.toString() ?? '',
+    );
     final prefs = _asMap(p['partnerPreferences'] ?? p['partner_preferences']);
-    _prefAgeMin = TextEditingController(text: prefs['age_min']?.toString() ?? '');
-    _prefAgeMax = TextEditingController(text: prefs['age_max']?.toString() ?? '');
-    _prefLocation = TextEditingController(text: _cleanSinglePreference(prefs['location']) ?? '');
-    _prefProfession = TextEditingController(text: _cleanSinglePreference(prefs['profession']) ?? '');
-    _prefReligion = TextEditingController(text: _cleanSinglePreference(prefs['religion']) ?? '');
-    _prefCaste = TextEditingController(text: _cleanSinglePreference(prefs['caste']) ?? '');
+    _prefAgeMin = TextEditingController(
+      text: prefs['age_min']?.toString() ?? '',
+    );
+    _prefAgeMax = TextEditingController(
+      text: prefs['age_max']?.toString() ?? '',
+    );
+    _prefLocation = TextEditingController(
+      text: _cleanSinglePreference(prefs['location']) ?? '',
+    );
+    _prefProfession = TextEditingController(
+      text: _cleanSinglePreference(prefs['profession']) ?? '',
+    );
+    _prefReligion = TextEditingController(
+      text: _cleanSinglePreference(prefs['religion']) ?? '',
+    );
+    _prefCaste = TextEditingController(
+      text: _cleanSinglePreference(prefs['caste']) ?? '',
+    );
     _photos = _photoUrls(p);
     _gender = _normalizeGender(p['gender']);
-    _photoVisible = (p['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
+    _photoVisible =
+        (p['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
     _selectedCity = _city.text.trim().isEmpty ? null : _city.text.trim();
-    _selectedReligion = _religion.text.trim().isEmpty ? null : _religion.text.trim();
+    _selectedReligion = _religion.text.trim().isEmpty
+        ? null
+        : _religion.text.trim();
     _selectedCaste = _caste.text.trim().isEmpty ? null : _caste.text.trim();
-    _selectedSubCaste = _subCaste.text.trim().isEmpty ? null : _subCaste.text.trim();
-    _selectedMotherTongue = _motherTongue.text.trim().isEmpty ? null : _motherTongue.text.trim();
-    _selectedMaritalStatus = _maritalStatus.text.trim().isEmpty ? null : _maritalStatus.text.trim();
-    _selectedEducation = _education.text.trim().isEmpty ? null : _education.text.trim();
-    _selectedProfession = _occupation.text.trim().isEmpty ? null : _occupation.text.trim();
-    _selectedPrefLocation = _prefLocation.text.trim().isEmpty ? null : _prefLocation.text.trim();
-    _selectedPrefReligion = _prefReligion.text.trim().isEmpty ? null : _prefReligion.text.trim();
-    _selectedPrefCaste = _prefCaste.text.trim().isEmpty ? null : _prefCaste.text.trim();
-    _selectedPrefProfession = _prefProfession.text.trim().isEmpty ? null : _prefProfession.text.trim();
+    _selectedSubCaste = _subCaste.text.trim().isEmpty
+        ? null
+        : _subCaste.text.trim();
+    _selectedMotherTongue = _motherTongue.text.trim().isEmpty
+        ? null
+        : _motherTongue.text.trim();
+    _selectedMaritalStatus = _maritalStatus.text.trim().isEmpty
+        ? null
+        : _maritalStatus.text.trim();
+    _selectedEducation = _education.text.trim().isEmpty
+        ? null
+        : _education.text.trim();
+    _selectedProfession = _occupation.text.trim().isEmpty
+        ? null
+        : _occupation.text.trim();
+    _selectedPrefLocation = _prefLocation.text.trim().isEmpty
+        ? null
+        : _prefLocation.text.trim();
+    _selectedPrefReligion = _prefReligion.text.trim().isEmpty
+        ? null
+        : _prefReligion.text.trim();
+    _selectedPrefCaste = _prefCaste.text.trim().isEmpty
+        ? null
+        : _prefCaste.text.trim();
+    _selectedPrefProfession = _prefProfession.text.trim().isEmpty
+        ? null
+        : _prefProfession.text.trim();
     if (_selectedReligion != null && _selectedReligion!.isNotEmpty) {
       unawaited(_loadCasteOptions(_selectedReligion!, pref: false));
     }
@@ -3794,7 +4508,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final birth = DateTime(y, m, d);
     final now = DateTime.now();
     var age = now.year - birth.year;
-    if (now.month < birth.month || (now.month == birth.month && now.day < birth.day)) age--;
+    if (now.month < birth.month ||
+        (now.month == birth.month && now.day < birth.day))
+      age--;
     return age > 0 ? age : null;
   }
 
@@ -3818,7 +4534,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
       return;
     }
     final remoteCastes = await widget.api.castes(religion);
-    final merged = _mergeDropdownOptions(remoteCastes, pref ? _selectedPrefCaste : _selectedCaste);
+    final merged = _mergeDropdownOptions(
+      remoteCastes,
+      pref ? _selectedPrefCaste : _selectedCaste,
+    );
     if (!mounted) return;
     setState(() {
       if (pref) {
@@ -3840,13 +4559,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
       return;
     }
     final remoteSubCastes = await widget.api.subCastes(caste);
-    final merged = _mergeDropdownOptions(
-      <String>[
-        ..._subCasteChoices(caste, null),
-        ...remoteSubCastes,
-      ],
-      _selectedSubCaste,
-    );
+    final merged = _mergeDropdownOptions(<String>[
+      ..._subCasteChoices(caste, null),
+      ...remoteSubCastes,
+    ], _selectedSubCaste);
     if (!mounted) return;
     setState(() => _availableSubCastes = merged);
   }
@@ -3865,7 +4581,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
       }
       if (dob.isEmpty || age == null) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter a valid date of birth in YYYY-MM-DD format.')),
+          const SnackBar(
+            content: Text(
+              'Please enter a valid date of birth in YYYY-MM-DD format.',
+            ),
+          ),
         );
         return;
       }
@@ -3941,7 +4661,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
   }
 
   Future<void> _uploadPhoto() async {
-    final picked = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 72);
+    final picked = await _picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 72,
+    );
     if (picked == null) return;
     setState(() => _uploadingPhoto = true);
     try {
@@ -3976,9 +4699,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(refreshedProfile);
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Photo removed')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Photo removed')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4000,9 +4723,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(refreshedProfile);
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile photo updated')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Profile photo updated')));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -4018,471 +4741,645 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return PopScope(
       canPop: !widget.requireProfileCompletion,
       child: Scaffold(
-      backgroundColor: const Color(0xFFFFF8E7),
-      appBar: AppBar(
-        automaticallyImplyLeading: !widget.requireProfileCompletion,
-        title: Text(widget.requireProfileCompletion ? 'Complete Your Profile' : 'Edit Profile'),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (widget.requireProfileCompletion)
+        backgroundColor: const Color(0xFFFFF8E7),
+        appBar: AppBar(
+          automaticallyImplyLeading: !widget.requireProfileCompletion,
+          title: Text(
+            widget.requireProfileCompletion
+                ? 'Complete Your Profile'
+                : 'Edit Profile',
+          ),
+        ),
+        body: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            if (widget.requireProfileCompletion)
+              _CreamCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'Complete your profile to continue',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF8B0000),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Please fill in your name, date of birth, phone number, and gender first.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: _textSecondaryColor,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             _CreamCard(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  Text(
-                    'Complete your profile to continue',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000)),
+                children: [
+                  const Text(
+                    'Profile Photos',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF8B0000),
+                    ),
                   ),
-                  SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
-                    'Please fill in your name, date of birth, phone number, and gender first.',
-                    style: TextStyle(fontSize: 13, color: _textSecondaryColor, height: 1.4),
+                    '${_photos.length}/5 uploaded. Choose one as your profile photo.',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: _textSecondaryColor,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    height: 92,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: _photos.length >= 5
+                          ? _photos.length
+                          : _photos.length + 1,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (_, index) {
+                        if (index == _photos.length) {
+                          return InkWell(
+                            onTap: _uploadingPhoto ? null : _uploadPhoto,
+                            borderRadius: BorderRadius.circular(16),
+                            child: Container(
+                              width: 92,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF0F0),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE8DCC8),
+                                ),
+                              ),
+                              child: Center(
+                                child: _uploadingPhoto
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(
+                                        Icons.add_a_photo_outlined,
+                                        color: _primaryColor,
+                                      ),
+                              ),
+                            ),
+                          );
+                        }
+                        return Stack(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: _SmartImage(
+                                source: _photos[index],
+                                width: 92,
+                                height: 92,
+                                fit: BoxFit.cover,
+                                fallback: () => Container(
+                                  width: 92,
+                                  height: 92,
+                                  color: const Color(0xFFFFF0F0),
+                                  child: const Icon(
+                                    Icons.person,
+                                    color: _borderColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              top: 4,
+                              left: 4,
+                              child: InkWell(
+                                onTap: _uploadingPhoto
+                                    ? null
+                                    : () => _setPrimaryPhoto(index),
+                                child: Container(
+                                  width: 24,
+                                  height: 24,
+                                  decoration: BoxDecoration(
+                                    color: index == 0
+                                        ? const Color(0xFF8B0000)
+                                        : Colors.black.withValues(alpha: 0.55),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    index == 0 ? Icons.star : Icons.star_border,
+                                    size: 16,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              left: 4,
+                              bottom: 4,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.62),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  index == 0
+                                      ? 'Profile Photo'
+                                      : 'Photo ${index + 1}',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              top: 4,
+                              right: 4,
+                              child: InkWell(
+                                onTap: _uploadingPhoto
+                                    ? null
+                                    : () => _deletePhoto(index),
+                                child: Container(
+                                  width: 20,
+                                  height: 20,
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.65),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.close,
+                                    size: 14,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile.adaptive(
+                    contentPadding: EdgeInsets.zero,
+                    activeColor: _primaryColor,
+                    title: const Text(
+                      'Show photos to matched users',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: _textColor,
+                      ),
+                    ),
+                    subtitle: Text(
+                      _photoVisible ? 'Visible' : 'Hidden',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: _textSecondaryColor,
+                      ),
+                    ),
+                    value: _photoVisible,
+                    onChanged: (value) => setState(() => _photoVisible = value),
                   ),
                 ],
               ),
             ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Profile Photos', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000))),
-                const SizedBox(height: 6),
-                Text(
-                  '${_photos.length}/5 uploaded. Choose one as your profile photo.',
-                  style: const TextStyle(fontSize: 12, color: _textSecondaryColor),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  height: 92,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: _photos.length >= 5 ? _photos.length : _photos.length + 1,
-                    separatorBuilder: (_, __) => const SizedBox(width: 12),
-                    itemBuilder: (_, index) {
-                      if (index == _photos.length) {
-                        return InkWell(
-                          onTap: _uploadingPhoto ? null : _uploadPhoto,
-                          borderRadius: BorderRadius.circular(16),
-                          child: Container(
-                            width: 92,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFF0F0),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: const Color(0xFFE8DCC8)),
+            _CreamCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Basic Information',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF8B0000),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _LabeledField(label: 'Full Name', controller: _name),
+                  const SizedBox(height: 16),
+                  _LabeledField(
+                    label: 'Date of Birth (YYYY-MM-DD)',
+                    controller: _dob,
+                    hint: '1995-06-15',
+                  ),
+                  const SizedBox(height: 16),
+                  _LabeledField(
+                    label: 'Phone',
+                    controller: _phone,
+                    keyboardType: TextInputType.phone,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: _genderOptions.contains(_gender)
+                              ? _gender
+                              : 'Male',
+                          onChanged: (value) =>
+                              setState(() => _gender = value ?? 'Male'),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Male',
+                              child: Text('Male'),
                             ),
-                            child: Center(
-                              child: _uploadingPhoto
-                                  ? const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
-                                  : const Icon(Icons.add_a_photo_outlined, color: _primaryColor),
+                            DropdownMenuItem(
+                              value: 'Female',
+                              child: Text('Female'),
                             ),
+                          ],
+                          decoration: const InputDecoration(
+                            labelText: 'Gender',
                           ),
-                        );
-                      }
-                      return Stack(
-                        children: [
-                          ClipRRect(
-                            borderRadius: BorderRadius.circular(16),
-                            child: _SmartImage(
-                              source: _photos[index],
-                              width: 92,
-                              height: 92,
-                              fit: BoxFit.cover,
-                              fallback: () => Container(
-                                width: 92,
-                                height: 92,
-                                color: const Color(0xFFFFF0F0),
-                                child: const Icon(Icons.person, color: _borderColor),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            top: 4,
-                            left: 4,
-                            child: InkWell(
-                              onTap: _uploadingPhoto ? null : () => _setPrimaryPhoto(index),
-                              child: Container(
-                                width: 24,
-                                height: 24,
-                                decoration: BoxDecoration(
-                                  color: index == 0 ? const Color(0xFF8B0000) : Colors.black.withValues(alpha: 0.55),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  index == 0 ? Icons.star : Icons.star_border,
-                                  size: 16,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            left: 4,
-                            bottom: 4,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.62),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Text(
-                                index == 0 ? 'Profile Photo' : 'Photo ${index + 1}',
-                                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w600),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            top: 4,
-                            right: 4,
-                            child: InkWell(
-                              onTap: _uploadingPhoto ? null : () => _deletePhoto(index),
-                              child: Container(
-                                width: 20,
-                                height: 20,
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.65),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(Icons.close, size: 14, color: Colors.white),
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _DisabledField(
+                          label: 'Age (auto-calculated)',
+                          value:
+                              _age(_dob.text.trim())?.toString() ??
+                              'Enter DOB above',
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            _CreamCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Professional Details',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF8B0000),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'City/State',
+                    value: _selectedCity,
+                    options: _mergeDropdownOptions(
+                      _stateOptions,
+                      _selectedCity,
+                    ),
+                    hint: 'Select state',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedCity = value;
+                        _city.text = value ?? '';
+                      });
                     },
                   ),
-                ),
-                const SizedBox(height: 16),
-                SwitchListTile.adaptive(
-                  contentPadding: EdgeInsets.zero,
-                  activeColor: _primaryColor,
-                  title: const Text(
-                    'Show photos to matched users',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: _textColor),
-                  ),
-                  subtitle: Text(
-                    _photoVisible ? 'Visible' : 'Hidden',
-                    style: const TextStyle(fontSize: 12, color: _textSecondaryColor),
-                  ),
-                  value: _photoVisible,
-                  onChanged: (value) => setState(() => _photoVisible = value),
-                ),
-              ],
-            ),
-          ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Basic Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000))),
-                const SizedBox(height: 16),
-                _LabeledField(label: 'Full Name', controller: _name),
-                const SizedBox(height: 16),
-                _LabeledField(label: 'Date of Birth (YYYY-MM-DD)', controller: _dob, hint: '1995-06-15'),
-                const SizedBox(height: 16),
-                _LabeledField(label: 'Phone', controller: _phone, keyboardType: TextInputType.phone),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value: _genderOptions.contains(_gender) ? _gender : 'Male',
-                        onChanged: (value) => setState(() => _gender = value ?? 'Male'),
-                        items: const [
-                          DropdownMenuItem(value: 'Male', child: Text('Male')),
-                          DropdownMenuItem(value: 'Female', child: Text('Female')),
-                        ],
-                        decoration: const InputDecoration(labelText: 'Gender'),
-                      ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Religion',
+                    value: _selectedReligion,
+                    options: _mergeDropdownOptions(
+                      _religionOptions,
+                      _selectedReligion,
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _DisabledField(label: 'Age (auto-calculated)', value: _age(_dob.text.trim())?.toString() ?? 'Enter DOB above'),
+                    hint: 'Select religion',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedReligion = value;
+                        _religion.text = value ?? '';
+                        _selectedCaste = null;
+                        _selectedSubCaste = null;
+                        _availableSubCastes = const <String>[];
+                        _caste.clear();
+                        _subCaste.clear();
+                      });
+                      unawaited(_loadCasteOptions(value ?? '', pref: false));
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Caste',
+                    value: _selectedCaste,
+                    options: _mergeDropdownOptions(
+                      _availableCastes,
+                      _selectedCaste,
                     ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Professional Details', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000))),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'City/State',
-                  value: _selectedCity,
-                  options: _mergeDropdownOptions(_stateOptions, _selectedCity),
-                  hint: 'Select state',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedCity = value;
-                      _city.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Religion',
-                  value: _selectedReligion,
-                  options: _mergeDropdownOptions(_religionOptions, _selectedReligion),
-                  hint: 'Select religion',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedReligion = value;
-                      _religion.text = value ?? '';
-                      _selectedCaste = null;
-                      _selectedSubCaste = null;
-                      _availableSubCastes = const <String>[];
-                      _caste.clear();
-                      _subCaste.clear();
-                    });
-                    unawaited(_loadCasteOptions(value ?? '', pref: false));
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Caste',
-                  value: _selectedCaste,
-                  options: _mergeDropdownOptions(_availableCastes, _selectedCaste),
-                  hint: _selectedReligion == null ? 'Select religion first' : 'Select caste',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedCaste = value;
-                      _caste.text = value ?? '';
-                      _selectedSubCaste = null;
-                      _availableSubCastes = const <String>[];
-                      _subCaste.clear();
-                    });
-                    unawaited(_loadSubCasteOptions(value ?? ''));
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Sub Caste',
-                  value: _selectedSubCaste,
-                  options: _mergeDropdownOptions(
-                    <String>[
+                    hint: _selectedReligion == null
+                        ? 'Select religion first'
+                        : 'Select caste',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedCaste = value;
+                        _caste.text = value ?? '';
+                        _selectedSubCaste = null;
+                        _availableSubCastes = const <String>[];
+                        _subCaste.clear();
+                      });
+                      unawaited(_loadSubCasteOptions(value ?? ''));
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Sub Caste',
+                    value: _selectedSubCaste,
+                    options: _mergeDropdownOptions(<String>[
                       ..._subCasteChoices(_selectedCaste, null),
                       ..._availableSubCastes,
-                    ],
-                    _selectedSubCaste,
+                    ], _selectedSubCaste),
+                    hint: _selectedCaste == null
+                        ? 'Select caste first'
+                        : 'Select sub caste',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedSubCaste = value;
+                        _subCaste.text = value ?? '';
+                      });
+                    },
                   ),
-                  hint: _selectedCaste == null ? 'Select caste first' : 'Select sub caste',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedSubCaste = value;
-                      _subCaste.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Mother Tongue',
-                  value: _selectedMotherTongue,
-                  options: _mergeDropdownOptions(_motherTongueOptions, _selectedMotherTongue),
-                  hint: 'Select language',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedMotherTongue = value;
-                      _motherTongue.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Marital Status',
-                  value: _selectedMaritalStatus,
-                  options: _mergeDropdownOptions(_maritalStatusOptions, _selectedMaritalStatus),
-                  hint: 'Select status',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedMaritalStatus = value;
-                      _maritalStatus.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Education',
-                  value: _selectedEducation,
-                  options: _mergeDropdownOptions(_educationOptions, _selectedEducation),
-                  hint: 'Select education',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedEducation = value;
-                      _education.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Occupation',
-                  value: _selectedProfession,
-                  options: _mergeDropdownOptions(_professionOptions, _selectedProfession),
-                  hint: 'Select occupation',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedProfession = value;
-                      _occupation.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _LabeledField(label: 'Height', controller: _height),
-                const SizedBox(height: 16),
-                _LabeledField(label: 'Income', controller: _income),
-              ],
-            ),
-          ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('About You', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000))),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _about,
-                  minLines: 4,
-                  maxLines: 6,
-                  decoration: const InputDecoration(labelText: 'About Yourself'),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _familyDetails,
-                  minLines: 3,
-                  maxLines: 5,
-                  decoration: const InputDecoration(labelText: 'Family Details'),
-                ),
-              ],
-            ),
-          ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Partner Preferences', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF8B0000))),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _LabeledField(
-                        label: 'Preferred Min Age',
-                        controller: _prefAgeMin,
-                        keyboardType: TextInputType.number,
-                      ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Mother Tongue',
+                    value: _selectedMotherTongue,
+                    options: _mergeDropdownOptions(
+                      _motherTongueOptions,
+                      _selectedMotherTongue,
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: _LabeledField(
-                        label: 'Preferred Max Age',
-                        controller: _prefAgeMax,
-                        keyboardType: TextInputType.number,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Preferred Religion',
-                  value: _selectedPrefReligion,
-                  options: _mergeDropdownOptions(_religionOptions, _selectedPrefReligion),
-                  hint: 'Select religion',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedPrefReligion = value;
-                      _prefReligion.text = value ?? '';
-                      _selectedPrefCaste = null;
-                      _prefCaste.clear();
-                    });
-                    unawaited(_loadCasteOptions(value ?? '', pref: true));
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Preferred Caste',
-                  value: _selectedPrefCaste,
-                  options: _mergeDropdownOptions(_availablePrefCastes, _selectedPrefCaste),
-                  hint: _selectedPrefReligion == null ? 'Select religion first' : 'Select caste',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedPrefCaste = value;
-                      _prefCaste.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Preferred Location',
-                  value: _selectedPrefLocation,
-                  options: _mergeDropdownOptions(_stateOptions, _selectedPrefLocation),
-                  hint: 'Select state',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedPrefLocation = value;
-                      _prefLocation.text = value ?? '';
-                    });
-                  },
-                ),
-                const SizedBox(height: 16),
-                _DropdownField(
-                  label: 'Preferred Profession',
-                  value: _selectedPrefProfession,
-                  options: _mergeDropdownOptions(_professionOptions, _selectedPrefProfession),
-                  hint: 'Select profession',
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedPrefProfession = value;
-                      _prefProfession.text = value ?? '';
-                    });
-                  },
-                ),
-              ],
-            ),
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: _saving ? null : _save,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: const Color(0xFF8B0000),
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    hint: 'Select language',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedMotherTongue = value;
+                        _motherTongue.text = value ?? '';
+                      });
+                    },
                   ),
-                  icon: const Icon(Icons.save, size: 20),
-                  label: Text(_saving ? 'Saving...' : (widget.requireProfileCompletion ? 'Save & Continue' : 'Save Profile')),
-                ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Marital Status',
+                    value: _selectedMaritalStatus,
+                    options: _mergeDropdownOptions(
+                      _maritalStatusOptions,
+                      _selectedMaritalStatus,
+                    ),
+                    hint: 'Select status',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedMaritalStatus = value;
+                        _maritalStatus.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Education',
+                    value: _selectedEducation,
+                    options: _mergeDropdownOptions(
+                      _educationOptions,
+                      _selectedEducation,
+                    ),
+                    hint: 'Select education',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedEducation = value;
+                        _education.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Occupation',
+                    value: _selectedProfession,
+                    options: _mergeDropdownOptions(
+                      _professionOptions,
+                      _selectedProfession,
+                    ),
+                    hint: 'Select occupation',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedProfession = value;
+                        _occupation.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _LabeledField(label: 'Height', controller: _height),
+                  const SizedBox(height: 16),
+                  _LabeledField(label: 'Income', controller: _income),
+                ],
               ),
-              if (!widget.requireProfileCompletion) ...[
-                const SizedBox(width: 16),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(48),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            _CreamCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'About You',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF8B0000),
                     ),
-                    child: const Text('Cancel', style: TextStyle(color: _textColor, fontWeight: FontWeight.w600)),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _about,
+                    minLines: 4,
+                    maxLines: 6,
+                    decoration: const InputDecoration(
+                      labelText: 'About Yourself',
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _familyDetails,
+                    minLines: 3,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      labelText: 'Family Details',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            _CreamCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Partner Preferences',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF8B0000),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _LabeledField(
+                          label: 'Preferred Min Age',
+                          controller: _prefAgeMin,
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _LabeledField(
+                          label: 'Preferred Max Age',
+                          controller: _prefAgeMax,
+                          keyboardType: TextInputType.number,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Religion',
+                    value: _selectedPrefReligion,
+                    options: _mergeDropdownOptions(
+                      _religionOptions,
+                      _selectedPrefReligion,
+                    ),
+                    hint: 'Select religion',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefReligion = value;
+                        _prefReligion.text = value ?? '';
+                        _selectedPrefCaste = null;
+                        _prefCaste.clear();
+                      });
+                      unawaited(_loadCasteOptions(value ?? '', pref: true));
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Caste',
+                    value: _selectedPrefCaste,
+                    options: _mergeDropdownOptions(
+                      _availablePrefCastes,
+                      _selectedPrefCaste,
+                    ),
+                    hint: _selectedPrefReligion == null
+                        ? 'Select religion first'
+                        : 'Select caste',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefCaste = value;
+                        _prefCaste.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Location',
+                    value: _selectedPrefLocation,
+                    options: _mergeDropdownOptions(
+                      _stateOptions,
+                      _selectedPrefLocation,
+                    ),
+                    hint: 'Select state',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefLocation = value;
+                        _prefLocation.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Profession',
+                    value: _selectedPrefProfession,
+                    options: _mergeDropdownOptions(
+                      _professionOptions,
+                      _selectedPrefProfession,
+                    ),
+                    hint: 'Select profession',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefProfession = value;
+                        _prefProfession.text = value ?? '';
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _saving ? null : _save,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF8B0000),
+                      minimumSize: const Size.fromHeight(48),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    icon: const Icon(Icons.save, size: 20),
+                    label: Text(
+                      _saving
+                          ? 'Saving...'
+                          : (widget.requireProfileCompletion
+                                ? 'Save & Continue'
+                                : 'Save Profile'),
+                    ),
                   ),
                 ),
+                if (!widget.requireProfileCompletion) ...[
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(48),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(
+                          color: _textColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ],
-            ],
-          ),
-        ],
+            ),
+          ],
+        ),
       ),
-    ));
+    );
   }
 }
 
 class SubscriptionPage extends StatefulWidget {
-  const SubscriptionPage({super.key, required this.api, required this.token, required this.currentPlan});
+  const SubscriptionPage({
+    super.key,
+    required this.api,
+    required this.token,
+    required this.currentPlan,
+  });
 
   final ApiClient api;
   final String token;
@@ -4526,10 +5423,16 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
       await _launchPaymentUrl(context, link);
       if (orderId.isNotEmpty) {
         await Future<void>.delayed(const Duration(seconds: 2));
-        final verified = PaymentStatus.fromMap(await widget.api.verifyOrder(widget.token, orderId));
+        final verified = PaymentStatus.fromMap(
+          await widget.api.verifyOrder(widget.token, orderId),
+        );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Payment status: ${verified.status}. You can refresh this page to update your plan.')),
+          SnackBar(
+            content: Text(
+              'Payment status: ${verified.status}. You can refresh this page to update your plan.',
+            ),
+          ),
         );
       }
     } catch (e) {
@@ -4557,27 +5460,55 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                 final id = plan['id']?.toString() ?? '';
                 final current = id == widget.currentPlan;
                 final available = plan['available'] == true;
-                final features = List<dynamic>.from(plan['features'] as List? ?? <dynamic>[]);
+                final features = List<dynamic>.from(
+                  plan['features'] as List? ?? <dynamic>[],
+                );
                 return Card(
                   child: Padding(
                     padding: const EdgeInsets.all(18),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(plan['name']?.toString() ?? id, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                        Text(
+                          plan['name']?.toString() ?? id,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                         const SizedBox(height: 8),
                         Text(plan['tagline']?.toString() ?? ''),
                         const SizedBox(height: 8),
-                        Text('INR ${plan['discountedPrice'] ?? plan['price']}', style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, color: Color(0xFF8B0000))),
+                        Text(
+                          'INR ${plan['discountedPrice'] ?? plan['price']}',
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFF8B0000),
+                          ),
+                        ),
                         const SizedBox(height: 12),
-                        ...features.map((f) => Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Text('• ${f.toString()}'),
-                            )),
+                        ...features.map(
+                          (f) => Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Text('• ${f.toString()}'),
+                          ),
+                        ),
                         const SizedBox(height: 12),
                         FilledButton(
-                          onPressed: (!available || current || _processing != null) ? null : () => _buy(id),
-                          child: Text(current ? 'Current Plan' : !available ? 'Coming Soon' : _processing == id ? 'Processing...' : 'Choose Plan'),
+                          onPressed:
+                              (!available || current || _processing != null)
+                              ? null
+                              : () => _buy(id),
+                          child: Text(
+                            current
+                                ? 'Current Plan'
+                                : !available
+                                ? 'Coming Soon'
+                                : _processing == id
+                                ? 'Processing...'
+                                : 'Choose Plan',
+                          ),
                         ),
                       ],
                     ),
@@ -4639,7 +5570,9 @@ class _ReactSubscriptionPageState extends State<ReactSubscriptionPage> {
       await _launchPaymentUrl(context, link);
       if (orderId.isNotEmpty) {
         await Future<void>.delayed(const Duration(seconds: 2));
-        final verified = PaymentStatus.fromMap(await widget.api.verifyOrder(widget.token, orderId));
+        final verified = PaymentStatus.fromMap(
+          await widget.api.verifyOrder(widget.token, orderId),
+        );
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Payment status: ${verified.status}.')),
@@ -4668,7 +5601,11 @@ class _ReactSubscriptionPageState extends State<ReactSubscriptionPage> {
                 const Text(
                   'Choose Your Plan',
                   textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700, color: _textColor),
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 const Text(
@@ -4682,18 +5619,26 @@ class _ReactSubscriptionPageState extends State<ReactSubscriptionPage> {
                   final id = plan['id']?.toString() ?? '';
                   final current = id == widget.currentPlan;
                   final available = plan['available'] == true;
-                  final features = List<dynamic>.from(plan['features'] as List? ?? <dynamic>[]);
+                  final features = List<dynamic>.from(
+                    plan['features'] as List? ?? <dynamic>[],
+                  );
                   final isFocus = id == 'focus';
                   final isCommit = id == 'commit';
-                  final background = isFocus ? const Color(0xFF8B0000) : Colors.white;
+                  final background = isFocus
+                      ? const Color(0xFF8B0000)
+                      : Colors.white;
                   final textColor = isFocus ? Colors.white : _textColor;
-                  final subtitleColor = isFocus ? Colors.white70 : _textSecondaryColor;
+                  final subtitleColor = isFocus
+                      ? Colors.white70
+                      : _textSecondaryColor;
                   return Container(
                     margin: const EdgeInsets.only(bottom: 24),
                     padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(
                       color: background,
-                      borderRadius: BorderRadius.circular(isFocus || isCommit ? 20 : 16),
+                      borderRadius: BorderRadius.circular(
+                        isFocus || isCommit ? 20 : 16,
+                      ),
                       border: isFocus ? null : Border.all(color: _borderColor),
                     ),
                     child: Column(
@@ -4702,90 +5647,151 @@ class _ReactSubscriptionPageState extends State<ReactSubscriptionPage> {
                         if (isFocus)
                           Container(
                             margin: const EdgeInsets.only(bottom: 16),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 6,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFFFFD700),
                               borderRadius: BorderRadius.circular(12),
                             ),
-                            child: const Text('MOST POPULAR', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF333333))),
+                            child: const Text(
+                              'MOST POPULAR',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFF333333),
+                              ),
+                            ),
                           ),
                         if (isCommit)
                           Align(
                             alignment: Alignment.centerRight,
                             child: Container(
                               margin: const EdgeInsets.only(bottom: 16),
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 6,
+                              ),
                               decoration: BoxDecoration(
                                 color: Colors.grey,
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: const Text('COMING SOON', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Colors.white)),
+                              child: const Text(
+                                'COMING SOON',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.white,
+                                ),
+                              ),
                             ),
                           ),
                         Center(
                           child: Icon(
-                            isFocus ? Icons.star : isCommit ? Icons.emoji_events : Icons.check_circle,
+                            isFocus
+                                ? Icons.star
+                                : isCommit
+                                ? Icons.emoji_events
+                                : Icons.check_circle,
                             size: 32,
-                            color: isFocus ? const Color(0xFFFFD700) : isCommit ? _textSecondaryColor : Colors.green,
+                            color: isFocus
+                                ? const Color(0xFFFFD700)
+                                : isCommit
+                                ? _textSecondaryColor
+                                : Colors.green,
                           ),
                         ),
                         const SizedBox(height: 12),
                         Center(
                           child: Text(
                             plan['name']?.toString() ?? id,
-                            style: TextStyle(fontSize: 24, fontWeight: FontWeight.w700, color: textColor),
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              color: textColor,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 8),
                         Center(
                           child: Text(
                             plan['tagline']?.toString() ?? '',
-                            style: TextStyle(fontSize: 14, color: subtitleColor),
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: subtitleColor,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
                         Center(
                           child: Text(
                             'INR ${plan['discountedPrice'] ?? plan['price'] ?? ''}',
-                            style: TextStyle(fontSize: 42, fontWeight: FontWeight.w800, color: textColor),
+                            style: TextStyle(
+                              fontSize: 42,
+                              fontWeight: FontWeight.w800,
+                              color: textColor,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
-                        ...features.map((feature) => Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(Icons.check_circle, size: 18, color: isFocus ? const Color(0xFFFFD700) : Colors.green),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      feature.toString(),
-                                      style: TextStyle(fontSize: 14, color: isFocus ? Colors.white70 : _textColor),
+                        ...features.map(
+                          (feature) => Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Icon(
+                                  Icons.check_circle,
+                                  size: 18,
+                                  color: isFocus
+                                      ? const Color(0xFFFFD700)
+                                      : Colors.green,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    feature.toString(),
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: isFocus
+                                          ? Colors.white70
+                                          : _textColor,
                                     ),
                                   ),
-                                ],
-                              ),
-                            )),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,
                           child: FilledButton(
-                            onPressed: (!available || current || _processing != null) ? null : () => _buy(id),
+                            onPressed:
+                                (!available || current || _processing != null)
+                                ? null
+                                : () => _buy(id),
                             style: FilledButton.styleFrom(
-                              backgroundColor: isFocus ? Colors.white24 : _surfaceColor,
-                              foregroundColor: isFocus ? Colors.white : _textSecondaryColor,
+                              backgroundColor: isFocus
+                                  ? Colors.white24
+                                  : _surfaceColor,
+                              foregroundColor: isFocus
+                                  ? Colors.white
+                                  : _textSecondaryColor,
                               minimumSize: const Size.fromHeight(48),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
                             ),
                             child: Text(
                               current
                                   ? 'Current Plan'
                                   : !available
-                                      ? 'Coming Soon'
-                                      : _processing == id
-                                          ? 'Processing...'
-                                          : 'Subscribe Now',
+                                  ? 'Coming Soon'
+                                  : _processing == id
+                                  ? 'Processing...'
+                                  : 'Subscribe Now',
                             ),
                           ),
                         ),
@@ -4800,7 +5806,13 @@ class _ReactSubscriptionPageState extends State<ReactSubscriptionPage> {
 }
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key, required this.api, required this.token, required this.currentUser, required this.partner});
+  const ChatPage({
+    super.key,
+    required this.api,
+    required this.token,
+    required this.currentUser,
+    required this.partner,
+  });
 
   final ApiClient api;
   final String token;
@@ -4834,14 +5846,20 @@ class _ChatPageState extends State<ChatPage> {
     unawaited(_loadTypingPreference());
     _load();
     _connectSocket();
-    _pollTimer = Timer.periodic(const Duration(seconds: 6), (_) => _load(silent: true));
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 6),
+      (_) => _load(silent: true),
+    );
     _text.addListener(_onTypingChanged);
   }
 
   Future<void> _loadTypingPreference() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
-    setState(() => _typingEnabled = prefs.getBool('settings_typing_indicators') ?? true);
+    setState(
+      () =>
+          _typingEnabled = prefs.getBool('settings_typing_indicators') ?? true,
+    );
   }
 
   @override
@@ -4865,16 +5883,16 @@ class _ChatPageState extends State<ChatPage> {
     if (!_typingEnabled) return;
     if (_text.text.trim().isEmpty) return;
     _typingDebounce?.cancel();
-    _typingDebounce = Timer(const Duration(milliseconds: 650), _emitTypingEvent);
+    _typingDebounce = Timer(
+      const Duration(milliseconds: 650),
+      _emitTypingEvent,
+    );
   }
 
   void _emitTypingEvent() {
     if (!_socketConnected || _socket == null || _partnerId.isEmpty) return;
     try {
-      _socket!.add(jsonEncode({
-        'action': 'typing',
-        'receiverId': _partnerId,
-      }));
+      _socket!.add(jsonEncode({'action': 'typing', 'receiverId': _partnerId}));
     } catch (_) {}
   }
 
@@ -4893,8 +5911,9 @@ class _ChatPageState extends State<ChatPage> {
     if (!silent) setState(() => _loading = true);
     try {
       final items = await widget.api.messages(widget.token, _partnerId);
-      final serverMessages = items.map((item) => ChatMessage.fromMap(_asMap(item))).toList()
-        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final serverMessages =
+          items.map((item) => ChatMessage.fromMap(_asMap(item))).toList()
+            ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       if (!mounted) return;
       _mergeServerMessages(serverMessages);
       _sendMarkRead();
@@ -4909,7 +5928,9 @@ class _ChatPageState extends State<ChatPage> {
         .toList();
     final merged = <ChatMessage>[...serverMessages];
     for (final local in pending) {
-      final exists = serverMessages.any((remote) => _messageEquivalent(remote, local));
+      final exists = serverMessages.any(
+        (remote) => _messageEquivalent(remote, local),
+      );
       if (!exists) {
         merged.add(local);
       }
@@ -4926,7 +5947,11 @@ class _ChatPageState extends State<ChatPage> {
     final remoteTime = DateTime.tryParse(remote.createdAt);
     final localTime = DateTime.tryParse(local.createdAt);
     if (remoteTime == null || localTime == null) return false;
-    final diff = remoteTime.toUtc().difference(localTime.toUtc()).inSeconds.abs();
+    final diff = remoteTime
+        .toUtc()
+        .difference(localTime.toUtc())
+        .inSeconds
+        .abs();
     return diff <= 30;
   }
 
@@ -4945,10 +5970,14 @@ class _ChatPageState extends State<ChatPage> {
       updated[byId] = message.copyWith(status: ChatMessageStatus.sent);
     } else {
       final pendingIndex = updated.indexWhere(
-        (item) => item.status != ChatMessageStatus.sent && _messageEquivalent(message, item),
+        (item) =>
+            item.status != ChatMessageStatus.sent &&
+            _messageEquivalent(message, item),
       );
       if (pendingIndex >= 0) {
-        updated[pendingIndex] = message.copyWith(status: ChatMessageStatus.sent);
+        updated[pendingIndex] = message.copyWith(
+          status: ChatMessageStatus.sent,
+        );
       } else {
         updated.add(message.copyWith(status: ChatMessageStatus.sent));
       }
@@ -4961,10 +5990,9 @@ class _ChatPageState extends State<ChatPage> {
   void _sendMarkRead() {
     if (!_socketConnected || _socket == null || _partnerId.isEmpty) return;
     try {
-      _socket!.add(jsonEncode({
-        'action': 'mark_read',
-        'partnerId': _partnerId,
-      }));
+      _socket!.add(
+        jsonEncode({'action': 'mark_read', 'partnerId': _partnerId}),
+      );
     } catch (_) {}
   }
 
@@ -4973,7 +6001,9 @@ class _ChatPageState extends State<ChatPage> {
     _reconnectTimer?.cancel();
     final steps = <int>[2, 4, 6, 10, 15, 20];
     final waitSeconds =
-        steps[_reconnectAttempt < steps.length ? _reconnectAttempt : steps.length - 1];
+        steps[_reconnectAttempt < steps.length
+            ? _reconnectAttempt
+            : steps.length - 1];
     _reconnectAttempt++;
     _reconnectTimer = Timer(Duration(seconds: waitSeconds), () {
       if (!_shouldReconnect) return;
@@ -5080,11 +6110,13 @@ class _ChatPageState extends State<ChatPage> {
     _text.clear();
     try {
       if (_socketConnected && _socket != null && _partnerId.isNotEmpty) {
-        _socket!.add(jsonEncode({
-          'action': 'send_message',
-          'receiverId': _partnerId,
-          'content': content,
-        }));
+        _socket!.add(
+          jsonEncode({
+            'action': 'send_message',
+            'receiverId': _partnerId,
+            'content': content,
+          }),
+        );
         unawaited(
           Future<void>.delayed(const Duration(seconds: 10), () {
             if (!mounted) return;
@@ -5098,7 +6130,12 @@ class _ChatPageState extends State<ChatPage> {
             }
           }),
         );
-        unawaited(Future<void>.delayed(const Duration(seconds: 2), () => _load(silent: true)));
+        unawaited(
+          Future<void>.delayed(
+            const Duration(seconds: 2),
+            () => _load(silent: true),
+          ),
+        );
       } else {
         await _sendViaRest(localMessage);
       }
@@ -5118,8 +6155,8 @@ class _ChatPageState extends State<ChatPage> {
     final statusLabel = _partnerTyping
         ? 'Typing...'
         : _socketConnected
-            ? 'Online'
-            : '';
+        ? 'Online'
+        : '';
     final partnerName = widget.partner['name']?.toString() ?? 'Chat';
     return Scaffold(
       backgroundColor: const Color(0xFFF7EFE8),
@@ -5134,10 +6171,19 @@ class _ChatPageState extends State<ChatPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(partnerName, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                  Text(
+                    partnerName,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   Text(
                     statusLabel.isEmpty ? 'Direct message' : statusLabel,
-                    style: const TextStyle(fontSize: 11, color: _textSecondaryColor),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: _textSecondaryColor,
+                    ),
                   ),
                 ],
               ),
@@ -5159,112 +6205,166 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ),
                     child: ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.fromLTRB(14, 40, 14, 18),
-                    itemCount: _messages.length + (_partnerTyping ? 1 : 0),
-                    itemBuilder: (_, index) {
-                      if (_partnerTyping && index == _messages.length) {
-                        return Align(
-                          alignment: Alignment.centerLeft,
-                          child: Container(
-                            margin: const EdgeInsets.only(bottom: 12),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFFE8DCC8)),
-                              boxShadow: const [
-                                BoxShadow(color: Color(0x0D000000), blurRadius: 10, offset: Offset(0, 4)),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: const [
-                                Text(
-                                  'Typing',
-                                  style: TextStyle(fontSize: 13, color: _textSecondaryColor),
-                                ),
-                                SizedBox(width: 6),
-                                Text('...', style: TextStyle(fontSize: 16, color: _textSecondaryColor)),
-                              ],
-                            ),
-                          ),
-                        );
-                      }
-                      final message = _messages[index];
-                      final mine = message.senderId == _myId;
-                      final bubbleTextColor = mine ? Colors.white : Colors.black87;
-                      final failed = message.status == ChatMessageStatus.failed;
-                      final sending = message.status == ChatMessageStatus.sending;
-                      return Align(
-                        alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                        child: GestureDetector(
-                          onTap: failed ? () => _retryFailed(message) : null,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.76),
+                      controller: _scrollController,
+                      padding: const EdgeInsets.fromLTRB(14, 40, 14, 18),
+                      itemCount: _messages.length + (_partnerTyping ? 1 : 0),
+                      itemBuilder: (_, index) {
+                        if (_partnerTyping && index == _messages.length) {
+                          return Align(
+                            alignment: Alignment.centerLeft,
                             child: Container(
                               margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                                vertical: 10,
+                              ),
                               decoration: BoxDecoration(
-                                color: mine ? const Color(0xFF8B0000) : Colors.white,
-                                borderRadius: BorderRadius.only(
-                                  topLeft: const Radius.circular(20),
-                                  topRight: const Radius.circular(20),
-                                  bottomLeft: Radius.circular(mine ? 20 : 6),
-                                  bottomRight: Radius.circular(mine ? 6 : 20),
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: const Color(0xFFE8DCC8),
                                 ),
-                                border: mine ? null : Border.all(color: const Color(0xFFE8DCC8)),
                                 boxShadow: const [
-                                  BoxShadow(color: Color(0x12000000), blurRadius: 10, offset: Offset(0, 4)),
+                                  BoxShadow(
+                                    color: Color(0x0D000000),
+                                    blurRadius: 10,
+                                    offset: Offset(0, 4),
+                                  ),
                                 ],
                               ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(message.content, style: TextStyle(color: bubbleTextColor, height: 1.35)),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Text(
-                                        _formatMessageTime(message.createdAt),
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: mine ? Colors.white70 : _textSecondaryColor,
-                                        ),
-                                      ),
-                                      if (sending) ...[
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Sending...',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: mine ? Colors.white70 : _textSecondaryColor,
-                                          ),
-                                        ),
-                                      ],
-                                      if (failed) ...[
-                                        const SizedBox(width: 6),
-                                        Text(
-                                          'Failed. Tap to retry',
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: mine ? Colors.white70 : Colors.red.shade600,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ],
-                                    ],
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: const [
+                                  Text(
+                                    'Typing',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      color: _textSecondaryColor,
+                                    ),
+                                  ),
+                                  SizedBox(width: 6),
+                                  Text(
+                                    '...',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: _textSecondaryColor,
+                                    ),
                                   ),
                                 ],
                               ),
                             ),
+                          );
+                        }
+                        final message = _messages[index];
+                        final mine = message.senderId == _myId;
+                        final bubbleTextColor = mine
+                            ? Colors.white
+                            : Colors.black87;
+                        final failed =
+                            message.status == ChatMessageStatus.failed;
+                        final sending =
+                            message.status == ChatMessageStatus.sending;
+                        return Align(
+                          alignment: mine
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: GestureDetector(
+                            onTap: failed ? () => _retryFailed(message) : null,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth:
+                                    MediaQuery.sizeOf(context).width * 0.76,
+                              ),
+                              child: Container(
+                                margin: const EdgeInsets.only(bottom: 12),
+                                padding: const EdgeInsets.fromLTRB(
+                                  14,
+                                  12,
+                                  14,
+                                  10,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: mine
+                                      ? const Color(0xFF8B0000)
+                                      : Colors.white,
+                                  borderRadius: BorderRadius.only(
+                                    topLeft: const Radius.circular(20),
+                                    topRight: const Radius.circular(20),
+                                    bottomLeft: Radius.circular(mine ? 20 : 6),
+                                    bottomRight: Radius.circular(mine ? 6 : 20),
+                                  ),
+                                  border: mine
+                                      ? null
+                                      : Border.all(
+                                          color: const Color(0xFFE8DCC8),
+                                        ),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                      color: Color(0x12000000),
+                                      blurRadius: 10,
+                                      offset: Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      message.content,
+                                      style: TextStyle(
+                                        color: bubbleTextColor,
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          _formatMessageTime(message.createdAt),
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            color: mine
+                                                ? Colors.white70
+                                                : _textSecondaryColor,
+                                          ),
+                                        ),
+                                        if (sending) ...[
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Sending...',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: mine
+                                                  ? Colors.white70
+                                                  : _textSecondaryColor,
+                                            ),
+                                          ),
+                                        ],
+                                        if (failed) ...[
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            'Failed. Tap to retry',
+                                            style: TextStyle(
+                                              fontSize: 10,
+                                              color: mine
+                                                  ? Colors.white70
+                                                  : Colors.red.shade600,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ),
-                        ),
-                      );
-                    },
+                        );
+                      },
+                    ),
                   ),
-                ),
           ),
           SafeArea(
             top: false,
@@ -5280,7 +6380,11 @@ class _ChatPageState extends State<ChatPage> {
                         borderRadius: BorderRadius.circular(24),
                         border: Border.all(color: const Color(0xFFE8DCC8)),
                         boxShadow: const [
-                          BoxShadow(color: Color(0x0F000000), blurRadius: 10, offset: Offset(0, 4)),
+                          BoxShadow(
+                            color: Color(0x0F000000),
+                            blurRadius: 10,
+                            offset: Offset(0, 4),
+                          ),
                         ],
                       ),
                       child: TextField(
@@ -5289,7 +6393,10 @@ class _ChatPageState extends State<ChatPage> {
                           hintText: 'Write a message',
                           filled: false,
                           border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 14,
+                          ),
                         ),
                         minLines: 1,
                         maxLines: 4,
@@ -5312,9 +6419,16 @@ class _ChatPageState extends State<ChatPage> {
                           ? const SizedBox(
                               width: 16,
                               height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
                             )
-                          : const Icon(Icons.send, color: Colors.white, size: 20),
+                          : const Icon(
+                              Icons.send,
+                              color: Colors.white,
+                              size: 20,
+                            ),
                     ),
                   ),
                 ],
@@ -5349,7 +6463,11 @@ String? _firstPreferenceValue(dynamic value) {
   final text = value.toString().trim();
   if (text.isEmpty) return null;
   if (text.contains(',')) {
-    final parts = text.split(',').map((item) => item.trim()).where((item) => item.isNotEmpty).toList();
+    final parts = text
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
     return parts.isEmpty ? null : parts.first;
   }
   return text;
@@ -5377,11 +6495,26 @@ class _SettingsPageState extends State<SettingsPage> {
     } catch (_) {}
     if (!mounted) return;
     setState(() {
-      _pushNotifications = (remote['pushNotifications'] as bool?) ?? prefs.getBool('settings_push_notifications') ?? true;
-      _emailNotifications = (remote['emailNotifications'] as bool?) ?? prefs.getBool('settings_email_notifications') ?? true;
-      _profileVisible = (remote['profileVisible'] as bool?) ?? prefs.getBool('settings_profile_visible') ?? true;
-      _showLastSeen = (remote['showLastSeen'] as bool?) ?? prefs.getBool('settings_show_last_seen') ?? true;
-      _typingIndicators = (remote['typingIndicators'] as bool?) ?? prefs.getBool('settings_typing_indicators') ?? true;
+      _pushNotifications =
+          (remote['pushNotifications'] as bool?) ??
+          prefs.getBool('settings_push_notifications') ??
+          true;
+      _emailNotifications =
+          (remote['emailNotifications'] as bool?) ??
+          prefs.getBool('settings_email_notifications') ??
+          true;
+      _profileVisible =
+          (remote['profileVisible'] as bool?) ??
+          prefs.getBool('settings_profile_visible') ??
+          true;
+      _showLastSeen =
+          (remote['showLastSeen'] as bool?) ??
+          prefs.getBool('settings_show_last_seen') ??
+          true;
+      _typingIndicators =
+          (remote['typingIndicators'] as bool?) ??
+          prefs.getBool('settings_typing_indicators') ??
+          true;
       _loading = false;
     });
   }
@@ -5482,17 +6615,24 @@ class _SettingsPageState extends State<SettingsPage> {
                   icon: Icons.shield,
                   label: 'Security & Safety Tips',
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(builder: (_) => const SecuritySafetyPage()),
+                    MaterialPageRoute<void>(
+                      builder: (_) => const SecuritySafetyPage(),
+                    ),
                   ),
                 ),
                 _SettingsTile(
                   icon: Icons.description,
                   label: 'Terms & Privacy',
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute<void>(builder: (_) => const TermsPrivacyPage()),
+                    MaterialPageRoute<void>(
+                      builder: (_) => const TermsPrivacyPage(),
+                    ),
                   ),
                 ),
-                const _SettingsTile(icon: Icons.info_outline, label: 'App Version 1.0.0'),
+                const _SettingsTile(
+                  icon: Icons.info_outline,
+                  label: 'App Version 1.0.0',
+                ),
               ],
             ),
     );
@@ -5526,7 +6666,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
         widget.api.notifications(widget.token),
         widget.api.unreadCount(widget.token),
       ]);
-      final notifications = List<dynamic>.from(results[0] as List? ?? <dynamic>[]);
+      final notifications = List<dynamic>.from(
+        results[0] as List? ?? <dynamic>[],
+      );
       final unreadChats = (results[1] as num?)?.toInt() ?? 0;
       final merged = <dynamic>[
         if (unreadChats > 0)
@@ -5561,72 +6703,89 @@ class _NotificationsPageState extends State<NotificationsPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _items.isEmpty
-              ? const Center(
-                  child: Text(
-                    'No notifications yet',
-                    style: TextStyle(color: _textSecondaryColor),
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: ListView.separated(
+          ? const Center(
+              child: Text(
+                'No notifications yet',
+                style: TextStyle(color: _textSecondaryColor),
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _load,
+              child: ListView.separated(
+                padding: const EdgeInsets.all(16),
+                itemCount: _items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (_, index) {
+                  final item = _asMap(_items[index]);
+                  final message = item['message']?.toString() ?? '';
+                  final type = item['type']?.toString() ?? 'notification';
+                  final createdAt =
+                      item['createdAt']?.toString() ??
+                      item['created_at']?.toString();
+                  return Container(
                     padding: const EdgeInsets.all(16),
-                    itemCount: _items.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (_, index) {
-                      final item = _asMap(_items[index]);
-                      final message = item['message']?.toString() ?? '';
-                      final type = item['type']?.toString() ?? 'notification';
-                      final createdAt = item['createdAt']?.toString() ?? item['created_at']?.toString();
-                      return Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: _borderColor),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: _borderColor),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 38,
+                          height: 38,
+                          decoration: BoxDecoration(
+                            color: _primaryColor.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(
+                            Icons.notifications,
+                            color: _primaryColor,
+                          ),
                         ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: _primaryColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(10),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                type.replaceAll('_', ' ').toUpperCase(),
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: _textSecondaryColor,
+                                ),
                               ),
-                              child: const Icon(Icons.notifications, color: _primaryColor),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    type.replaceAll('_', ' ').toUpperCase(),
-                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: _textSecondaryColor),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    message,
-                                    style: const TextStyle(fontSize: 14, color: _textColor, fontWeight: FontWeight.w500),
-                                  ),
-                                  if (createdAt != null && createdAt.isNotEmpty) ...[
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      _formatMessageTime(createdAt),
-                                      style: const TextStyle(fontSize: 12, color: _textSecondaryColor),
-                                    ),
-                                  ],
-                                ],
+                              const SizedBox(height: 4),
+                              Text(
+                                message,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: _textColor,
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
-                            ),
-                          ],
+                              if (createdAt != null &&
+                                  createdAt.isNotEmpty) ...[
+                                const SizedBox(height: 4),
+                                Text(
+                                  _formatMessageTime(createdAt),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: _textSecondaryColor,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
                         ),
-                      );
-                    },
-                  ),
-                ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
     );
   }
 }
@@ -5700,7 +6859,11 @@ class _SuccessStoriesPageState extends State<SuccessStoriesPage> {
                               height: 180,
                               color: _surfaceColor,
                               alignment: Alignment.center,
-                              child: const Icon(Icons.favorite, color: _primaryColor, size: 40),
+                              child: const Icon(
+                                Icons.favorite,
+                                color: _primaryColor,
+                                size: 40,
+                              ),
                             ),
                           ),
                         Padding(
@@ -5710,20 +6873,32 @@ class _SuccessStoriesPageState extends State<SuccessStoriesPage> {
                             children: [
                               Text(
                                 story['names']?.toString() ?? 'Couple',
-                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: _textColor),
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: _textColor,
+                                ),
                               ),
-                              if ((story['location']?.toString() ?? '').isNotEmpty)
+                              if ((story['location']?.toString() ?? '')
+                                  .isNotEmpty)
                                 Padding(
                                   padding: const EdgeInsets.only(top: 4),
                                   child: Text(
                                     story['location'].toString(),
-                                    style: const TextStyle(fontSize: 13, color: _textSecondaryColor),
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      color: _textSecondaryColor,
+                                    ),
                                   ),
                                 ),
                               const SizedBox(height: 10),
                               Text(
                                 story['story']?.toString() ?? '',
-                                style: const TextStyle(fontSize: 14, color: _textColor, height: 1.45),
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: _textColor,
+                                  height: 1.45,
+                                ),
                               ),
                             ],
                           ),
@@ -5753,11 +6928,24 @@ class HelpSupportPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Support Channels', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'Support Channels',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('Email: support@vivaahsetu.in', style: TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                Text(
+                  'Email: support@vivaahsetu.in',
+                  style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                ),
                 SizedBox(height: 6),
-                Text('Phone: +91-00000-00000', style: TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                Text(
+                  'Phone: +91-00000-00000',
+                  style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                ),
               ],
             ),
           ),
@@ -5765,11 +6953,24 @@ class HelpSupportPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Safety', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'Safety',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('Report suspicious profiles immediately.', style: TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                Text(
+                  'Report suspicious profiles immediately.',
+                  style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                ),
                 SizedBox(height: 6),
-                Text('Never share OTP, bank details, or passwords.', style: TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                Text(
+                  'Never share OTP, bank details, or passwords.',
+                  style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                ),
               ],
             ),
           ),
@@ -5777,11 +6978,24 @@ class HelpSupportPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('FAQ', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'FAQ',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('How do connections work? You can keep up to 5 active connections for 15 days.', style: TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                Text(
+                  'How do connections work? You can keep up to 5 active connections for 15 days.',
+                  style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                ),
                 SizedBox(height: 6),
-                Text('Why is chat locked? Chat requires Focus or Commit plan with active mutual connection.', style: TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                Text(
+                  'Why is chat locked? Chat requires Focus or Commit plan with active mutual connection.',
+                  style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+                ),
               ],
             ),
           ),
@@ -5806,11 +7020,28 @@ class AboutPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('VivaahSetu', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: _textColor)),
+                Text(
+                  'VivaahSetu',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 8),
-                Text('A serious-intent matrimonial platform focused on meaningful matches, limited active connections, and authentic profiles.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'A serious-intent matrimonial platform focused on meaningful matches, limited active connections, and authentic profiles.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
                 SizedBox(height: 14),
-                Text('Version: 1.0.0', style: TextStyle(fontSize: 13, color: _textSecondaryColor)),
+                Text(
+                  'Version: 1.0.0',
+                  style: TextStyle(fontSize: 13, color: _textSecondaryColor),
+                ),
               ],
             ),
           ),
@@ -5835,11 +7066,32 @@ class SecuritySafetyPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Meet Safely', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'Meet Safely',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('Verify profile details through calls and family introductions before making commitments.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Verify profile details through calls and family introductions before making commitments.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
                 SizedBox(height: 8),
-                Text('Prefer public places for first meetings and share plans with a trusted person.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Prefer public places for first meetings and share plans with a trusted person.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
               ],
             ),
           ),
@@ -5847,11 +7099,32 @@ class SecuritySafetyPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Protect Your Data', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'Protect Your Data',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('Never share OTPs, bank details, passwords, or sensitive identity documents in chat.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Never share OTPs, bank details, passwords, or sensitive identity documents in chat.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
                 SizedBox(height: 8),
-                Text('Report suspicious payment requests or mismatched identity claims immediately.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Report suspicious payment requests or mismatched identity claims immediately.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
               ],
             ),
           ),
@@ -5876,9 +7149,23 @@ class TermsPrivacyPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Terms of Use', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'Terms of Use',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('Use VivaahSetu only for genuine matrimonial purposes. Fake profiles, harassment, scraping, and misuse are prohibited.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Use VivaahSetu only for genuine matrimonial purposes. Fake profiles, harassment, scraping, and misuse are prohibited.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
               ],
             ),
           ),
@@ -5886,11 +7173,32 @@ class TermsPrivacyPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Privacy Notice', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                Text(
+                  'Privacy Notice',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: _textColor,
+                  ),
+                ),
                 SizedBox(height: 10),
-                Text('Your profile, communication preferences, and account activity are used to deliver matches, notifications, and safety features.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Your profile, communication preferences, and account activity are used to deliver matches, notifications, and safety features.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
                 SizedBox(height: 8),
-                Text('Profile visibility and chat-status controls can be changed anytime from Settings.', style: TextStyle(fontSize: 14, color: _textSecondaryColor, height: 1.45)),
+                Text(
+                  'Profile visibility and chat-status controls can be changed anytime from Settings.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _textSecondaryColor,
+                    height: 1.45,
+                  ),
+                ),
               ],
             ),
           ),
@@ -5926,7 +7234,9 @@ class _BottomNavItem extends StatelessWidget {
           curve: Curves.easeOutCubic,
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-            color: selected ? _primaryColor.withValues(alpha: 0.14) : Colors.transparent,
+            color: selected
+                ? _primaryColor.withValues(alpha: 0.14)
+                : Colors.transparent,
             borderRadius: BorderRadius.circular(14),
           ),
           child: Column(
@@ -5935,13 +7245,20 @@ class _BottomNavItem extends StatelessWidget {
               Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  Icon(icon, size: 20, color: selected ? _primaryColor : _textSecondaryColor),
+                  Icon(
+                    icon,
+                    size: 20,
+                    color: selected ? _primaryColor : _textSecondaryColor,
+                  ),
                   if (badgeCount > 0)
                     Positioned(
                       right: -8,
                       top: -6,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 1,
+                        ),
                         decoration: BoxDecoration(
                           color: _secondaryColor,
                           borderRadius: BorderRadius.circular(999),
@@ -6022,13 +7339,20 @@ class _HomeMetricCard extends StatelessWidget {
                 children: [
                   Text(
                     value,
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _textColor),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: _textColor,
+                    ),
                   ),
                   Text(
                     label,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12, color: _textSecondaryColor),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: _textSecondaryColor,
+                    ),
                   ),
                 ],
               ),
@@ -6088,14 +7412,21 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                   children: [
                     Text(
                       profile['name']?.toString() ?? 'User',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: _textColor,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       _personSummary(profile),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12, color: _textSecondaryColor),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: _textSecondaryColor,
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Row(
@@ -6104,24 +7435,30 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                           onPressed: onTap,
                           style: OutlinedButton.styleFrom(
                             minimumSize: const Size(66, 32),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
                           ),
                           child: const Text('View'),
                         ),
                         const SizedBox(width: 8),
                         FilledButton(
-                          onPressed: (alreadyConnected || requestSent) ? null : onConnect,
+                          onPressed: (alreadyConnected || requestSent)
+                              ? null
+                              : onConnect,
                           style: FilledButton.styleFrom(
                             minimumSize: const Size(80, 32),
                             backgroundColor: _primaryColor,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
                           ),
                           child: Text(
                             alreadyConnected
                                 ? 'Connected'
                                 : requestSent
-                                    ? 'Sent'
-                                    : 'Connect',
+                                ? 'Sent'
+                                : 'Connect',
                           ),
                         ),
                       ],
@@ -6173,7 +7510,10 @@ class _DropdownField extends StatelessWidget {
         ),
       ),
       items: options
-          .map((option) => DropdownMenuItem<String>(value: option, child: Text(option)))
+          .map(
+            (option) =>
+                DropdownMenuItem<String>(value: option, child: Text(option)),
+          )
           .toList(),
     );
   }
@@ -6197,7 +7537,14 @@ class _FilterField extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: _textColor)),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: _textColor,
+          ),
+        ),
         const SizedBox(height: 4),
         TextField(
           controller: controller,
@@ -6234,7 +7581,10 @@ class _MiniDetail extends StatelessWidget {
         children: [
           Icon(icon, size: 14, color: _textSecondaryColor),
           const SizedBox(width: 4),
-          Text(text, style: const TextStyle(fontSize: 14, color: _textSecondaryColor)),
+          Text(
+            text,
+            style: const TextStyle(fontSize: 14, color: _textSecondaryColor),
+          ),
         ],
       ),
     );
@@ -6263,12 +7613,20 @@ class _ConnectionsPane extends StatelessWidget {
       return ListView(
         children: [
           const SizedBox(height: 120),
-          const Icon(Icons.people_outline, size: 64, color: _textSecondaryColor),
+          const Icon(
+            Icons.people_outline,
+            size: 64,
+            color: _textSecondaryColor,
+          ),
           const SizedBox(height: 24),
           Text(
             emptyLabel,
             textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: _textColor),
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: _textColor,
+            ),
           ),
         ],
       );
@@ -6321,19 +7679,35 @@ class _ConnectionCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: _textColor,
+                      ),
+                    ),
                     if (detail1.isNotEmpty) ...[
                       const SizedBox(height: 4),
-                      Text(detail1, style: const TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                      Text(
+                        detail1,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: _textSecondaryColor,
+                        ),
+                      ),
                     ],
                     if (detail2.isNotEmpty) ...[
                       const SizedBox(height: 2),
-                      Text(detail2, style: const TextStyle(fontSize: 14, color: _textSecondaryColor)),
+                      Text(
+                        detail2,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: _textSecondaryColor,
+                        ),
+                      ),
                     ],
-                    if (badge != null) ...[
-                      const SizedBox(height: 8),
-                      badge!,
-                    ],
+                    if (badge != null) ...[const SizedBox(height: 8), badge!],
                   ],
                 ),
               ),
@@ -6368,10 +7742,7 @@ class _RoundIconButton extends StatelessWidget {
       child: Container(
         width: 44,
         height: 44,
-        decoration: BoxDecoration(
-          color: background,
-          shape: BoxShape.circle,
-        ),
+        decoration: BoxDecoration(color: background, shape: BoxShape.circle),
         child: Icon(icon, color: iconColor, size: 22),
       ),
     );
@@ -6395,11 +7766,19 @@ class _TimerBadge extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.access_time, size: 14, color: urgent ? Colors.white : _textColor),
+          Icon(
+            Icons.access_time,
+            size: 14,
+            color: urgent ? Colors.white : _textColor,
+          ),
           const SizedBox(width: 4),
           Text(
             daysLeft > 0 ? '$daysLeft days left' : 'Expired',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: urgent ? Colors.white : _textColor),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: urgent ? Colors.white : _textColor,
+            ),
           ),
         ],
       ),
@@ -6427,14 +7806,23 @@ class _ProfileMenuTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
-          border: showBorder ? const Border(bottom: BorderSide(color: _borderColor)) : null,
+          border: showBorder
+              ? const Border(bottom: BorderSide(color: _borderColor))
+              : null,
         ),
         child: Row(
           children: [
             Icon(icon, color: _textColor),
             const SizedBox(width: 16),
             Expanded(
-              child: Text(label, style: const TextStyle(fontSize: 16, color: _textColor, fontWeight: FontWeight.w500)),
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 16,
+                  color: _textColor,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
             const Icon(Icons.chevron_right, color: _textSecondaryColor),
           ],
@@ -6445,7 +7833,11 @@ class _ProfileMenuTile extends StatelessWidget {
 }
 
 class _ProfileDetailRow extends StatelessWidget {
-  const _ProfileDetailRow({required this.icon, required this.label, required this.value});
+  const _ProfileDetailRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
   final IconData icon;
   final String label;
@@ -6467,8 +7859,21 @@ class _ProfileDetailRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(label, style: const TextStyle(fontSize: 12, color: _textSecondaryColor)),
-                Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500, color: _textColor)),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: _textSecondaryColor,
+                  ),
+                ),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: _textColor,
+                  ),
+                ),
               ],
             ),
           ),
@@ -6499,7 +7904,12 @@ class _CreamCard extends StatelessWidget {
 }
 
 class _LabeledField extends StatelessWidget {
-  const _LabeledField({required this.label, required this.controller, this.hint, this.keyboardType});
+  const _LabeledField({
+    required this.label,
+    required this.controller,
+    this.hint,
+    this.keyboardType,
+  });
 
   final String label;
   final TextEditingController controller;
@@ -6545,7 +7955,10 @@ class _DisabledField extends StatelessWidget {
           borderSide: const BorderSide(color: Color(0xFFE8DCC8)),
         ),
       ),
-      child: Text(value, style: const TextStyle(fontSize: 14, color: _textSecondaryColor)),
+      child: Text(
+        value,
+        style: const TextStyle(fontSize: 14, color: _textSecondaryColor),
+      ),
     );
   }
 }
@@ -6559,7 +7972,14 @@ class _SettingsHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Text(text, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _textColor)),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w700,
+          color: _textColor,
+        ),
+      ),
     );
   }
 }
@@ -6582,7 +8002,14 @@ class _SettingsTile extends StatelessWidget {
       child: ListTile(
         onTap: onTap,
         leading: Icon(icon, color: _textColor),
-        title: Text(label, style: const TextStyle(fontSize: 16, color: _textColor, fontWeight: FontWeight.w500)),
+        title: Text(
+          label,
+          style: const TextStyle(
+            fontSize: 16,
+            color: _textColor,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
         trailing: const Icon(Icons.chevron_right, color: _textSecondaryColor),
       ),
     );
@@ -6734,9 +8161,12 @@ class _CircularProfileAvatar extends StatelessWidget {
   }
 
   Widget _avatarFallback() => Container(
-        decoration: const BoxDecoration(color: Color(0xFFF7EAE4), shape: BoxShape.circle),
-        child: Icon(Icons.person, size: size * 0.48, color: _textSecondaryColor),
-      );
+    decoration: const BoxDecoration(
+      color: Color(0xFFF7EAE4),
+      shape: BoxShape.circle,
+    ),
+    child: Icon(Icons.person, size: size * 0.48, color: _textSecondaryColor),
+  );
 }
 
 class _CoverPhoto extends StatelessWidget {
@@ -6783,10 +8213,10 @@ class _CoverPhoto extends StatelessWidget {
   }
 
   Widget _fallback() => Container(
-        color: const Color(0xFFFFF0F0),
-        alignment: Alignment.center,
-        child: const Icon(Icons.person, size: 72, color: _borderColor),
-      );
+    color: const Color(0xFFFFF0F0),
+    alignment: Alignment.center,
+    child: const Icon(Icons.person, size: 72, color: _borderColor),
+  );
 }
 
 class _AuthField extends StatelessWidget {
@@ -6842,9 +8272,12 @@ class _AuthField extends StatelessWidget {
 
 String _personSummary(Map<String, dynamic> data) {
   final parts = <String>[];
-  if (data['age'] != null && data['age'].toString().isNotEmpty) parts.add('${data['age']} yrs');
-  if (data['city'] != null && data['city'].toString().isNotEmpty) parts.add(data['city'].toString());
-  if (data['occupation'] != null && data['occupation'].toString().isNotEmpty) parts.add(data['occupation'].toString());
+  if (data['age'] != null && data['age'].toString().isNotEmpty)
+    parts.add('${data['age']} yrs');
+  if (data['city'] != null && data['city'].toString().isNotEmpty)
+    parts.add(data['city'].toString());
+  if (data['occupation'] != null && data['occupation'].toString().isNotEmpty)
+    parts.add(data['occupation'].toString());
   return parts.isEmpty ? 'Profile available' : parts.join(' | ');
 }
 

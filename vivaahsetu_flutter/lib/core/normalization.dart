@@ -1,12 +1,15 @@
 Map<String, dynamic> asMap(dynamic value) =>
     value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
 
-List<dynamic> asList(dynamic value) => value is List ? List<dynamic>.from(value) : <dynamic>[];
+List<dynamic> asList(dynamic value) =>
+    value is List ? List<dynamic>.from(value) : <dynamic>[];
 
 String? resolveMediaUrl(String baseUrl, String? raw) {
   final value = raw?.trim() ?? '';
   if (value.isEmpty) return null;
-  if (value.startsWith('http://') || value.startsWith('https://') || value.startsWith('data:')) {
+  if (value.startsWith('http://') ||
+      value.startsWith('https://') ||
+      value.startsWith('data:')) {
     return value;
   }
   final clean = baseUrl.replaceAll(RegExp(r'/+$'), '');
@@ -49,23 +52,36 @@ Map<String, dynamic> normalizeUserPayload(Map<String, dynamic> raw) {
   final photoUrl = (user['photoUrl']?.toString().trim().isNotEmpty == true)
       ? user['photoUrl'].toString().trim()
       : (user['profile_photo']?.toString().trim().isNotEmpty == true)
-          ? user['profile_photo'].toString().trim()
-          : (user['profilePhoto']?.toString().trim().isNotEmpty == true)
-              ? user['profilePhoto'].toString().trim()
-              : (photos.isNotEmpty ? photos.first.toString() : '');
+      ? user['profile_photo'].toString().trim()
+      : (user['profilePhoto']?.toString().trim().isNotEmpty == true)
+      ? user['profilePhoto'].toString().trim()
+      : (photos.isNotEmpty ? photos.first.toString() : '');
   user['id'] ??= user['_id']?.toString() ?? user['user_id']?.toString();
   user['dob'] ??= user['date_of_birth'];
   user['dateOfBirth'] ??= user['date_of_birth'];
   user['city'] ??= locationParts.isNotEmpty ? locationParts.first : '';
-  user['state'] ??= locationParts.length > 1 ? locationParts.sublist(1).join(', ') : '';
+  user['state'] ??= locationParts.length > 1
+      ? locationParts.sublist(1).join(', ')
+      : '';
   user['occupation'] ??= user['profession'];
   user['familyDetails'] ??= user['family_details'];
   user['partnerPreferences'] ??= user['partner_preferences'];
   user['maritalStatus'] ??= user['marital_status'];
   user['photoUrl'] ??= photoUrl;
-  user['requestSent'] ??= user['request_sent'] ?? false;
-  user['alreadyConnected'] ??= user['already_connected'] ?? false;
-  user['requestReceived'] ??= user['request_received'] ?? false;
+  final relStatus =
+      (user['relationshipStatus'] ?? user['relationship_status'] ?? '')
+          .toString()
+          .toUpperCase();
+  if (relStatus.isNotEmpty) {
+    user['relationshipStatus'] = relStatus;
+    user['relationship_status'] = relStatus;
+  }
+  user['requestSent'] ??=
+      relStatus == 'REQUEST_SENT' || user['request_sent'] == true;
+  user['alreadyConnected'] ??=
+      relStatus == 'CONNECTED' || user['already_connected'] == true;
+  user['requestReceived'] ??=
+      relStatus == 'REQUEST_RECEIVED' || user['request_received'] == true;
   user['connectedAt'] ??= user['connected_at'];
   user['expiresAt'] ??= user['expires_at'];
   user['planExpiresAt'] ??= user['plan_expires_at'];
@@ -89,26 +105,40 @@ Map<String, dynamic> normalizeResponseMap(Map<String, dynamic> raw) {
     data['user'] = normalizeUserPayload(asMap(data['user']));
   }
   if (data.containsKey('matches')) {
-    data['matches'] = asList(data['matches']).map((item) => normalizeUserPayload(asMap(item))).toList();
+    data['matches'] = asList(
+      data['matches'],
+    ).map((item) => normalizeUserPayload(asMap(item))).toList();
   }
   if (data.containsKey('connections')) {
-    data['connections'] =
-        asList(data['connections']).map((item) => normalizeUserPayload(asMap(item))).toList();
+    data['connections'] = asList(
+      data['connections'],
+    ).map((item) => normalizeUserPayload(asMap(item))).toList();
   }
-  final pendingReceived = data.containsKey('pending_received') ? data['pending_received'] : data['pendingReceived'];
-  final pendingSent = data.containsKey('pending_sent') ? data['pending_sent'] : data['pendingSent'];
+  final pendingReceived = data.containsKey('pending_received')
+      ? data['pending_received']
+      : data['pendingReceived'];
+  final pendingSent = data.containsKey('pending_sent')
+      ? data['pending_sent']
+      : data['pendingSent'];
   if (pendingReceived != null) {
-    data['pendingReceived'] =
-        asList(pendingReceived).map((item) => normalizeUserPayload(asMap(item))).toList();
+    data['pendingReceived'] = asList(
+      pendingReceived,
+    ).map((item) => normalizeUserPayload(asMap(item))).toList();
   }
   if (pendingSent != null) {
-    data['pendingSent'] = asList(pendingSent).map((item) => normalizeUserPayload(asMap(item))).toList();
+    data['pendingSent'] = asList(
+      pendingSent,
+    ).map((item) => normalizeUserPayload(asMap(item))).toList();
   }
   if (data.containsKey('messages')) {
-    data['messages'] = asList(data['messages']).map((item) => asMap(item)).toList();
+    data['messages'] = asList(
+      data['messages'],
+    ).map((item) => asMap(item)).toList();
   }
   if (data.containsKey('notifications')) {
-    data['notifications'] = asList(data['notifications']).map((item) => asMap(item)).toList();
+    data['notifications'] = asList(
+      data['notifications'],
+    ).map((item) => asMap(item)).toList();
   }
   if (data.containsKey('plans')) {
     data['plans'] = asList(data['plans']).map((item) => asMap(item)).toList();
@@ -146,6 +176,25 @@ Map<String, dynamic> normalizeMatchFilters(Map<String, dynamic> raw) {
   final caste = input['caste'];
   if (caste != null && caste.toString().trim().isNotEmpty) {
     normalized['caste'] = caste;
+  }
+  for (final key in [
+    'sub_caste',
+    'subCaste',
+    'education',
+    'marital_status',
+    'maritalStatus',
+    'mother_tongue',
+    'motherTongue',
+    'state',
+    'height_min',
+    'height_max',
+    'income_min',
+    'income_max',
+  ]) {
+    final value = input[key];
+    if (value != null && value.toString().trim().isNotEmpty) {
+      normalized[key] = value;
+    }
   }
   final page = input['page'];
   final limit = input['limit'];
