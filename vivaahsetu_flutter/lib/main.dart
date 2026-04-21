@@ -355,7 +355,7 @@ class VSNotificationService {
 
   Future<void> initialize() async {
     if (_initialized) return;
-    const android = AndroidInitializationSettings('ic_launcher');
+    const android = AndroidInitializationSettings('ic_notification');
     const initialization = InitializationSettings(android: android);
     await _plugin.initialize(
       settings: initialization,
