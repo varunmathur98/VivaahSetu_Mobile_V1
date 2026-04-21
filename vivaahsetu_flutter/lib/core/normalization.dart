@@ -8,20 +8,28 @@ String? resolveMediaUrl(String baseUrl, String? raw) {
   final value = raw?.trim() ?? '';
   if (value.isEmpty) return null;
   final clean = baseUrl.replaceAll(RegExp(r'/+$'), '');
+  String fileUrl(String path) {
+    final normalized = path.replaceAll(RegExp(r'^/+'), '');
+    if (normalized.startsWith('api/files/')) return '$clean/$normalized';
+    if (normalized.startsWith('uploads/'))
+      return '$clean/api/files/$normalized';
+    return '$clean/$normalized';
+  }
+
   if (value.startsWith('http://') ||
       value.startsWith('https://') ||
       value.startsWith('data:')) {
     final uri = Uri.tryParse(value);
-    if (uri != null &&
-        uri.host.toLowerCase() == 'vivaahsetu-mobile-v1.onrender.com') {
-      return '$clean${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}';
+    if (uri != null) {
+      final path = uri.path.replaceAll(RegExp(r'^/+'), '');
+      if (uri.host.toLowerCase() == 'vivaahsetu-mobile-v1.onrender.com' ||
+          path.startsWith('uploads/')) {
+        return fileUrl(path);
+      }
     }
     return value;
   }
-  if (value.startsWith('/')) {
-    return '$clean$value';
-  }
-  return '$clean/$value';
+  return fileUrl(value);
 }
 
 List<String> photoUrls(String baseUrl, Map<String, dynamic> data) {
