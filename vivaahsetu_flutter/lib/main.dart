@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -335,7 +336,76 @@ final Future<FirebaseApp> _firebaseInitFuture = Firebase.initializeApp();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   unawaited(_firebaseInitFuture);
+  await VSNotificationService.instance.initialize();
   runApp(const VivaahSetuApp());
+}
+
+class VSNotificationService {
+  VSNotificationService._();
+
+  static final VSNotificationService instance = VSNotificationService._();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
+  final StreamController<String> _tapController =
+      StreamController<String>.broadcast();
+  bool _initialized = false;
+  int _nextId = 1000;
+
+  Stream<String> get taps => _tapController.stream;
+
+  Future<void> initialize() async {
+    if (_initialized) return;
+    const android = AndroidInitializationSettings('ic_launcher');
+    const initialization = InitializationSettings(android: android);
+    await _plugin.initialize(
+      settings: initialization,
+      onDidReceiveNotificationResponse: (response) {
+        final payload = response.payload;
+        if (payload != null && payload.isNotEmpty) {
+          _tapController.add(payload);
+        }
+      },
+    );
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.requestNotificationsPermission();
+    final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+    final launchPayload =
+        launchDetails?.notificationResponse?.payload?.trim() ?? '';
+    if ((launchDetails?.didNotificationLaunchApp ?? false) &&
+        launchPayload.isNotEmpty) {
+      scheduleMicrotask(() => _tapController.add(launchPayload));
+    }
+    _initialized = true;
+  }
+
+  Future<void> show({
+    required String title,
+    required String body,
+    String payload = '',
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('settings_push_notifications') == false) return;
+    const androidDetails = AndroidNotificationDetails(
+      'vivaahsetu_realtime',
+      'VivaahSetu updates',
+      channelDescription: 'Connection, chat, and profile updates',
+      importance: Importance.high,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+      category: AndroidNotificationCategory.social,
+    );
+    await _plugin.show(
+      id: _nextId++,
+      title: title,
+      body: body,
+      notificationDetails: const NotificationDetails(android: androidDetails),
+      payload: payload,
+    );
+  }
 }
 
 class VivaahSetuApp extends StatelessWidget {
@@ -1639,8 +1709,10 @@ class _ShellPageState extends State<ShellPage> {
   int _realtimeRevision = 0;
   Timer? _unreadPollTimer;
   Timer? _reconnectTimer;
+  StreamSubscription<String>? _notificationTapSub;
   WebSocket? _realtimeSocket;
   bool _shouldReconnect = true;
+  String? _pendingChatPartnerId;
 
   @override
   void initState() {
@@ -1650,6 +1722,9 @@ class _ShellPageState extends State<ShellPage> {
       const Duration(seconds: 8),
       (_) => unawaited(_refreshUnreadCount()),
     );
+    _notificationTapSub = VSNotificationService.instance.taps.listen(
+      _handleNotificationPayload,
+    );
     unawaited(_connectRealtimeSocket());
   }
 
@@ -1658,8 +1733,27 @@ class _ShellPageState extends State<ShellPage> {
     _shouldReconnect = false;
     _unreadPollTimer?.cancel();
     _reconnectTimer?.cancel();
+    _notificationTapSub?.cancel();
     _realtimeSocket?.close(WebSocketStatus.normalClosure);
     super.dispose();
+  }
+
+  void _handleNotificationPayload(String payload) {
+    if (!mounted) return;
+    if (payload.startsWith('chat:')) {
+      final partnerId = payload.substring('chat:'.length).trim();
+      setState(() {
+        _pendingChatPartnerId = partnerId.isEmpty ? null : partnerId;
+        _index = 2;
+        _chatUnreadCount = 0;
+        _realtimeRevision++;
+      });
+      return;
+    }
+    setState(() {
+      _index = 0;
+      _realtimeRevision++;
+    });
   }
 
   void _scheduleRealtimeReconnect() {
@@ -1703,10 +1797,39 @@ class _ShellPageState extends State<ShellPage> {
     if (unread is num && mounted) {
       setState(() => _chatUnreadCount = unread.toInt());
     }
+    if (type == 'new_message') {
+      final message = _asMap(data['message']);
+      final myId = widget.user['id']?.toString() ?? '';
+      final senderId = (message['sender_id'] ?? message['senderId'] ?? '')
+          .toString();
+      final content = message['content']?.toString().trim() ?? '';
+      if (senderId.isNotEmpty && senderId != myId && _index != 2) {
+        unawaited(
+          VSNotificationService.instance.show(
+            title: 'New message on VivaahSetu',
+            body: content.isEmpty
+                ? 'You received a new chat message.'
+                : content,
+            payload: 'chat:$senderId',
+          ),
+        );
+      }
+    } else if (type == 'notification_created') {
+      final notification = _asMap(data['notification']);
+      final message = notification['message']?.toString().trim() ?? '';
+      unawaited(
+        VSNotificationService.instance.show(
+          title: 'VivaahSetu update',
+          body: message.isEmpty ? 'You have a new notification.' : message,
+          payload: 'notifications',
+        ),
+      );
+    }
     if (type == 'relationship_changed' ||
         type == 'profile_updated' ||
         type == 'settings_updated' ||
         type == 'subscription_changed' ||
+        type == 'notification_created' ||
         type == 'new_message') {
       unawaited(_refreshUnreadCount());
       if (type == 'profile_updated' && data['profile'] is Map) {
@@ -1759,6 +1882,11 @@ class _ShellPageState extends State<ShellPage> {
         api: widget.api,
         token: widget.token,
         user: widget.user,
+        initialPartnerId: _pendingChatPartnerId,
+        onInitialPartnerConsumed: () {
+          if (!mounted) return;
+          _pendingChatPartnerId = null;
+        },
       ),
       ProfileTab(
         key: ValueKey('profile-$_realtimeRevision'),
@@ -1778,13 +1906,13 @@ class _ShellPageState extends State<ShellPage> {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: _borderColor),
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: VSColors.border.withValues(alpha: 0.72)),
             boxShadow: const [
               BoxShadow(
-                color: Color(0x16000000),
-                blurRadius: 16,
-                offset: Offset(0, 6),
+                color: Color(0x1C5F0924),
+                blurRadius: 26,
+                offset: Offset(0, 10),
               ),
             ],
           ),
@@ -2064,11 +2192,7 @@ class _HomeTabState extends State<HomeTab> {
               child: Container(
                 padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_shaadiMaroon, _shaadiRose],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                  gradient: VSGradients.matrimonialHero,
                   borderRadius: BorderRadius.circular(28),
                   boxShadow: const [
                     BoxShadow(
@@ -2771,11 +2895,7 @@ class _BrowseTabState extends State<BrowseTab> {
                 margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
                 padding: const EdgeInsets.all(20),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_shaadiMaroon, _shaadiRose],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                  gradient: VSGradients.matrimonialHero,
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Row(
@@ -3311,11 +3431,7 @@ class _ConnectionsTabState extends State<ConnectionsTab>
               margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
               padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [_shaadiMaroon, _shaadiRose],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
+                gradient: VSGradients.matrimonialHero,
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Row(
@@ -3556,11 +3672,15 @@ class MessagesTab extends StatefulWidget {
     required this.api,
     required this.token,
     required this.user,
+    this.initialPartnerId,
+    this.onInitialPartnerConsumed,
   });
 
   final ApiClient api;
   final String token;
   final Map<String, dynamic> user;
+  final String? initialPartnerId;
+  final VoidCallback? onInitialPartnerConsumed;
 
   @override
   State<MessagesTab> createState() => _MessagesTabState();
@@ -3571,6 +3691,7 @@ class _MessagesTabState extends State<MessagesTab> {
   List<dynamic> _connections = <dynamic>[];
   Map<String, int> _unreadByPartner = <String, int>{};
   Map<String, ChatMessage> _lastMessageByPartner = <String, ChatMessage>{};
+  bool _openedInitialPartner = false;
 
   @override
   void initState() {
@@ -3622,9 +3743,40 @@ class _MessagesTabState extends State<MessagesTab> {
         _unreadByPartner = unreadByPartner;
         _lastMessageByPartner = lastByPartner;
       });
+      _openInitialPartnerIfNeeded(connections);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _openInitialPartnerIfNeeded(List<dynamic> connections) {
+    final targetId = widget.initialPartnerId?.trim() ?? '';
+    if (_openedInitialPartner || targetId.isEmpty) return;
+    Map<String, dynamic>? match;
+    for (final item in connections) {
+      final profile = _asMap(item);
+      if (profile['id']?.toString() == targetId) {
+        match = profile;
+        break;
+      }
+    }
+    final partner = match;
+    if (partner == null) return;
+    _openedInitialPartner = true;
+    widget.onInitialPartnerConsumed?.call();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ChatPage(
+            api: widget.api,
+            token: widget.token,
+            currentUser: widget.user,
+            partner: partner,
+          ),
+        ),
+      );
+    });
   }
 
   @override
@@ -3803,11 +3955,7 @@ class _ProfileTabState extends State<ProfileTab> {
               child: Container(
                 padding: const EdgeInsets.all(28),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [_shaadiMaroon, _shaadiRose],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
+                  gradient: VSGradients.matrimonialHero,
                   borderRadius: BorderRadius.circular(24),
                 ),
                 child: Column(
@@ -7304,10 +7452,18 @@ class _BottomNavItem extends StatelessWidget {
           curve: Curves.easeOutCubic,
           padding: const EdgeInsets.symmetric(vertical: 8),
           decoration: BoxDecoration(
-            color: selected
-                ? _primaryColor.withValues(alpha: 0.14)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(14),
+            gradient: selected ? VSGradients.goldAccent : null,
+            color: selected ? null : Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: selected
+                ? const [
+                    BoxShadow(
+                      color: Color(0x22E6A93A),
+                      blurRadius: 14,
+                      offset: Offset(0, 6),
+                    ),
+                  ]
+                : null,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -7318,7 +7474,7 @@ class _BottomNavItem extends StatelessWidget {
                   Icon(
                     icon,
                     size: 20,
-                    color: selected ? _primaryColor : _textSecondaryColor,
+                    color: selected ? VSColors.wineDark : _textSecondaryColor,
                   ),
                   if (badgeCount > 0)
                     Positioned(
@@ -7352,7 +7508,7 @@ class _BottomNavItem extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  color: selected ? _primaryColor : _textSecondaryColor,
+                  color: selected ? VSColors.wineDark : _textSecondaryColor,
                 ),
               ),
             ],
