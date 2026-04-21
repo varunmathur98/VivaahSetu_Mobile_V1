@@ -19,7 +19,7 @@ import 'core/normalization.dart' as adapter;
 
 const _baseUrl = String.fromEnvironment(
   'BACKEND_URL',
-  defaultValue: 'https://vivaahsetu-mobile-v1.onrender.com',
+  defaultValue: 'https://api.vivaahsetu.in',
 );
 const _primaryColor = VSColors.primary;
 const _secondaryColor = VSColors.secondary;

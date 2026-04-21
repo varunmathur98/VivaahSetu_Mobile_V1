@@ -13,6 +13,7 @@ if (-not (Test-Path $flutterBin)) {
 
 New-Item -ItemType Directory -Force -Path $localPubCache | Out-Null
 $env:PUB_CACHE = $localPubCache
+$env:BACKEND_URL = "https://api.vivaahsetu.in"
 
 function Remove-StaleState {
   Write-Host "Repairing Flutter metadata for this repo..." -ForegroundColor Yellow
@@ -39,7 +40,7 @@ if (-not $deviceLines) {
 }
 
 $deviceId = ($deviceLines[0] -split "\s+")[0]
-Write-Host "Launching on device $deviceId with PUB_CACHE=$localPubCache" -ForegroundColor Green
+Write-Host "Launching on device $deviceId with PUB_CACHE=$localPubCache and BACKEND_URL=$env:BACKEND_URL" -ForegroundColor Green
 
 Set-Location $projectRoot
-& $flutterBin run -d $deviceId --fast-start --no-pub --target lib/main.dart
+& $flutterBin run -d $deviceId --fast-start --no-pub --target lib/main.dart --dart-define BACKEND_URL=$env:BACKEND_URL

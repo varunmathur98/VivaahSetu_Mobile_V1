@@ -7,12 +7,17 @@ List<dynamic> asList(dynamic value) =>
 String? resolveMediaUrl(String baseUrl, String? raw) {
   final value = raw?.trim() ?? '';
   if (value.isEmpty) return null;
+  final clean = baseUrl.replaceAll(RegExp(r'/+$'), '');
   if (value.startsWith('http://') ||
       value.startsWith('https://') ||
       value.startsWith('data:')) {
+    final uri = Uri.tryParse(value);
+    if (uri != null &&
+        uri.host.toLowerCase() == 'vivaahsetu-mobile-v1.onrender.com') {
+      return '$clean${uri.path}${uri.hasQuery ? '?${uri.query}' : ''}';
+    }
     return value;
   }
-  final clean = baseUrl.replaceAll(RegExp(r'/+$'), '');
   if (value.startsWith('/')) {
     return '$clean$value';
   }
