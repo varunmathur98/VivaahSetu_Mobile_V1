@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 
 class VSColors {
-  static const primary = Color(0xFF9B1233);
-  static const secondary = Color(0xFFF4B740);
-  static const background = Color(0xFFFFFCFA);
-  static const surface = Color(0xFFFFF1EA);
-  static const text = Color(0xFF3A1F1D);
-  static const textSecondary = Color(0xFF8B6F6A);
-  static const border = Color(0xFFF0D4CC);
-  static const postLoginBackground = Color(0xFFFFF7F2);
-  static const shaadiRose = Color(0xFFD9475C);
+  static const primary = Color(0xFF8F102F);
+  static const secondary = Color(0xFFE6A93A);
+  static const background = Color(0xFFFFFBF5);
+  static const surface = Color(0xFFFFEFE7);
+  static const text = Color(0xFF2F1716);
+  static const textSecondary = Color(0xFF846A63);
+  static const border = Color(0xFFEFD2C4);
+  static const postLoginBackground = Color(0xFFFFF5ED);
+  static const shaadiRose = Color(0xFFE44C62);
+  static const wineDark = Color(0xFF5F0924);
+  static const sandal = Color(0xFFFFE3B0);
+  static const blush = Color(0xFFFFDCE3);
 }
 
 class VSRadius {
@@ -45,6 +48,13 @@ class VSCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: const BorderRadius.all(VSRadius.md),
         border: Border.all(color: VSColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x10000000),
+            blurRadius: 18,
+            offset: Offset(0, 8),
+          ),
+        ],
       ),
       child: child,
     );

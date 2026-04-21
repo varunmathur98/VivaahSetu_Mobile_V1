@@ -348,15 +348,17 @@ class VivaahSetuApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
+        fontFamily: 'sans',
         colorScheme: ColorScheme.fromSeed(
           seedColor: _primaryColor,
           primary: _primaryColor,
           secondary: _secondaryColor,
           surface: _backgroundColor,
+          tertiary: VSColors.sandal,
         ),
         scaffoldBackgroundColor: _backgroundColor,
         appBarTheme: const AppBarTheme(
-          backgroundColor: _backgroundColor,
+          backgroundColor: Color(0x00FFFFFF),
           foregroundColor: _textColor,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
@@ -368,7 +370,7 @@ class VivaahSetuApp extends StatelessWidget {
         ),
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
-          fillColor: _surfaceColor,
+          fillColor: Colors.white,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 16,
             vertical: 14,
@@ -387,10 +389,28 @@ class VivaahSetuApp extends StatelessWidget {
           ),
         ),
         navigationBarTheme: const NavigationBarThemeData(
-          backgroundColor: _backgroundColor,
-          indicatorColor: Color(0x18D4145A),
+          backgroundColor: Colors.white,
+          indicatorColor: Color(0x22E6A93A),
           labelTextStyle: WidgetStatePropertyAll(
             TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+        filledButtonTheme: FilledButtonThemeData(
+          style: FilledButton.styleFrom(
+            backgroundColor: _primaryColor,
+            foregroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+        chipTheme: ChipThemeData(
+          backgroundColor: VSColors.surface,
+          selectedColor: VSColors.blush,
+          side: const BorderSide(color: VSColors.border),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(999),
           ),
         ),
       ),
@@ -1616,7 +1636,11 @@ class ShellPage extends StatefulWidget {
 class _ShellPageState extends State<ShellPage> {
   int _index = 0;
   int _chatUnreadCount = 0;
+  int _realtimeRevision = 0;
   Timer? _unreadPollTimer;
+  Timer? _reconnectTimer;
+  WebSocket? _realtimeSocket;
+  bool _shouldReconnect = true;
 
   @override
   void initState() {
@@ -1626,12 +1650,72 @@ class _ShellPageState extends State<ShellPage> {
       const Duration(seconds: 8),
       (_) => unawaited(_refreshUnreadCount()),
     );
+    unawaited(_connectRealtimeSocket());
   }
 
   @override
   void dispose() {
+    _shouldReconnect = false;
     _unreadPollTimer?.cancel();
+    _reconnectTimer?.cancel();
+    _realtimeSocket?.close(WebSocketStatus.normalClosure);
     super.dispose();
+  }
+
+  void _scheduleRealtimeReconnect() {
+    if (!_shouldReconnect) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(
+      const Duration(seconds: 5),
+      () => unawaited(_connectRealtimeSocket()),
+    );
+  }
+
+  Future<void> _connectRealtimeSocket() async {
+    final backend = _baseUrl.replaceAll(RegExp(r'^http'), 'ws');
+    try {
+      final socket = await WebSocket.connect(
+        '$backend/ws/chat/${widget.token}',
+      );
+      _realtimeSocket = socket;
+      socket.listen(
+        _handleRealtimeEvent,
+        onDone: _scheduleRealtimeReconnect,
+        onError: (_) => _scheduleRealtimeReconnect(),
+        cancelOnError: true,
+      );
+    } catch (_) {
+      _scheduleRealtimeReconnect();
+    }
+  }
+
+  void _handleRealtimeEvent(dynamic event) {
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(event.toString());
+    } catch (_) {
+      return;
+    }
+    if (decoded is! Map) return;
+    final data = _asMap(decoded);
+    final type = data['type']?.toString() ?? '';
+    final unread = data['unreadCount'] ?? data['unread_count'];
+    if (unread is num && mounted) {
+      setState(() => _chatUnreadCount = unread.toInt());
+    }
+    if (type == 'relationship_changed' ||
+        type == 'profile_updated' ||
+        type == 'settings_updated' ||
+        type == 'subscription_changed' ||
+        type == 'new_message') {
+      unawaited(_refreshUnreadCount());
+      if (type == 'profile_updated' && data['profile'] is Map) {
+        unawaited(widget.onUserChanged(_asMap(data['profile'])));
+      }
+      if (mounted) {
+        setState(() => _realtimeRevision++);
+      }
+    }
   }
 
   Future<void> _refreshUnreadCount() async {
@@ -1658,14 +1742,26 @@ class _ShellPageState extends State<ShellPage> {
   Widget build(BuildContext context) {
     final pages = [
       HomeTab(
+        key: ValueKey('home-$_realtimeRevision'),
         api: widget.api,
         token: widget.token,
         user: widget.user,
         onNavigate: _goToTab,
       ),
-      ConnectionsTab(api: widget.api, token: widget.token, user: widget.user),
-      MessagesTab(api: widget.api, token: widget.token, user: widget.user),
+      ConnectionsTab(
+        key: ValueKey('connections-$_realtimeRevision'),
+        api: widget.api,
+        token: widget.token,
+        user: widget.user,
+      ),
+      MessagesTab(
+        key: ValueKey('messages-$_realtimeRevision'),
+        api: widget.api,
+        token: widget.token,
+        user: widget.user,
+      ),
       ProfileTab(
+        key: ValueKey('profile-$_realtimeRevision'),
         api: widget.api,
         token: widget.token,
         user: widget.user,
@@ -1768,22 +1864,7 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Map<String, dynamic> _partnerFilters(Map<String, dynamic> profile) {
-    final prefs = _asMap(
-      profile['partnerPreferences'] ?? profile['partner_preferences'],
-    );
-
-    final filters = <String, dynamic>{'page': 1, 'limit': 4};
-    if (prefs['age_min'] != null) filters['age_min'] = prefs['age_min'];
-    if (prefs['age_max'] != null) filters['age_max'] = prefs['age_max'];
-    final location = _firstPreferenceValue(prefs['location']);
-    final religion = _firstPreferenceValue(prefs['religion']);
-    final caste = _firstPreferenceValue(prefs['caste']);
-    final profession = _firstPreferenceValue(prefs['profession']);
-    if (location != null) filters['location'] = location;
-    if (religion != null) filters['religion'] = religion;
-    if (caste != null) filters['caste'] = caste;
-    if (profession != null) filters['profession'] = profession;
-    return filters;
+    return <String, dynamic>{'page': 1, 'limit': 4};
   }
 
   Future<void> _openEditProfile() async {
@@ -2572,21 +2653,10 @@ class _BrowseTabState extends State<BrowseTab> {
   }
 
   Map<String, dynamic> _partnerFiltersFromUser(Map<String, dynamic> user) {
-    final prefs = _asMap(
-      user['partnerPreferences'] ?? user['partner_preferences'],
-    );
-    final map = <String, dynamic>{};
-    if (prefs['age_min'] != null) map['age_min'] = prefs['age_min'];
-    if (prefs['age_max'] != null) map['age_max'] = prefs['age_max'];
-    final city = _firstPreferenceValue(prefs['location']);
-    final religion = _firstPreferenceValue(prefs['religion']);
-    final caste = _firstPreferenceValue(prefs['caste']);
-    final profession = _firstPreferenceValue(prefs['profession']);
-    if (city != null) map['location'] = city;
-    if (religion != null) map['religion'] = religion;
-    if (caste != null) map['caste'] = caste;
-    if (profession != null) map['profession'] = profession;
-    return map;
+    // Partner preferences are enforced by the shared backend. This screen only
+    // sends explicit refinements, so "clear filters" keeps preference matching
+    // intact without over-narrowing to a single saved option.
+    return <String, dynamic>{};
   }
 
   Future<void> _loadCasteOptions(
