@@ -1233,104 +1233,8 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final _email = TextEditingController();
-  final _password = TextEditingController();
-  final _name = TextEditingController();
   final _googleSignIn = GoogleSignIn(scopes: const ['email', 'profile']);
-  bool _signup = false;
-  bool _emailLoading = false;
   bool _googleLoading = false;
-  bool _showPassword = false;
-  String _gender = 'Male';
-
-  bool _isGoogleOnlyMessage(String message) =>
-      message.toLowerCase().contains('google sign-in only');
-
-  String _fallbackNameFromEmail(String email) {
-    final localPart = email.trim().split('@').first.trim();
-    if (localPart.isEmpty) return 'VivaahSetu User';
-    return localPart
-        .split(RegExp(r'[._-]+'))
-        .where((part) => part.trim().isNotEmpty)
-        .map(
-          (part) =>
-              '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}',
-        )
-        .join(' ');
-  }
-
-  @override
-  void dispose() {
-    _email.dispose();
-    _password.dispose();
-    _name.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (_email.text.trim().isEmpty) {
-      _toast('Please enter your email');
-      return;
-    }
-    if (_password.text.length < 6) {
-      _toast('Password must be at least 6 characters');
-      return;
-    }
-    if (_signup && _name.text.trim().isEmpty) {
-      _toast('Please enter your name');
-      return;
-    }
-    setState(() => _emailLoading = true);
-    try {
-      final payload = _signup
-          ? await widget.api.register(
-              _email.text,
-              _password.text,
-              _name.text,
-              _gender,
-            )
-          : await widget.api.login(_email.text, _password.text);
-      await widget.onAuth(payload);
-    } catch (e) {
-      final message = e.toString().replaceFirst('Exception: ', '');
-      if (!_signup && _isGoogleOnlyMessage(message)) {
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('This email uses Google first'),
-            content: Text(
-              'This email was first created with Google sign-in. You can continue with Google, or add password sign-in now with the password you already entered.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Close'),
-              ),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                  _google();
-                },
-                child: const Text('Continue with Google'),
-              ),
-              FilledButton(
-                onPressed: () async {
-                  Navigator.of(context).pop();
-                  await _linkPasswordToGoogleAccount();
-                },
-                child: const Text('Add Password Now'),
-              ),
-            ],
-          ),
-        );
-      } else {
-        _toast(message);
-      }
-    } finally {
-      if (mounted) setState(() => _emailLoading = false);
-    }
-  }
 
   Future<void> _google() async {
     setState(() => _googleLoading = true);
@@ -1392,38 +1296,6 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  Future<void> _linkPasswordToGoogleAccount() async {
-    final email = _email.text.trim();
-    final password = _password.text;
-    if (email.isEmpty) {
-      _toast('Please enter your email');
-      return;
-    }
-    if (password.length < 6) {
-      _toast('Password must be at least 6 characters');
-      return;
-    }
-
-    setState(() => _emailLoading = true);
-    try {
-      final payload = await widget.api.register(
-        email,
-        password,
-        _name.text.trim().isEmpty ? _fallbackNameFromEmail(email) : _name.text,
-        _gender,
-      );
-      await widget.onAuth(payload);
-      if (mounted) {
-        setState(() => _signup = false);
-      }
-      _toast('Password sign-in added to this account.');
-    } catch (e) {
-      _toast(e.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _emailLoading = false);
-    }
-  }
-
   void _toast(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(
@@ -1450,39 +1322,34 @@ class _LoginPageState extends State<LoginPage> {
                     fit: BoxFit.contain,
                   ),
                   const SizedBox(height: 8),
-                  Text(
-                    _signup ? 'Create Account' : 'Welcome Back',
+                  const Text(
+                    'Welcome to VivaahSetu',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.w700,
                       color: _textColor,
                     ),
                   ),
                   const SizedBox(height: 6),
-                  Text(
-                    _signup
-                        ? 'Join VivaahSetu to find your match'
-                        : 'Sign in to continue',
+                  const Text(
+                    'Continue securely with Google to find meaningful matches',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: _textSecondaryColor,
-                    ),
+                    style: TextStyle(fontSize: 14, color: _textSecondaryColor),
                   ),
                   const SizedBox(height: 24),
-                  OutlinedButton(
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: _borderColor),
-                      backgroundColor: _backgroundColor,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                  FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: _textColor,
+                      padding: const EdgeInsets.symmetric(vertical: 16),
                       shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(18),
                       ),
+                      side: const BorderSide(color: _borderColor),
+                      elevation: 0,
                     ),
-                    onPressed: (_googleLoading || _emailLoading)
-                        ? null
-                        : _google,
+                    onPressed: _googleLoading ? null : _google,
                     child: _googleLoading
                         ? const SizedBox(
                             width: 20,
@@ -1520,141 +1387,42 @@ class _LoginPageState extends State<LoginPage> {
                             ],
                           ),
                   ),
-                  const SizedBox(height: 18),
-                  Row(
-                    children: const [
-                      Expanded(child: Divider(color: _borderColor)),
-                      Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 12),
-                        child: Text(
-                          'OR',
-                          style: TextStyle(
-                            color: _textSecondaryColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      Expanded(child: Divider(color: _borderColor)),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  if (_signup) ...[
-                    _AuthField(
-                      controller: _name,
-                      hintText: 'Full Name',
-                      icon: Icons.person_outline,
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: VSColors.roseMist,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: VSColors.border),
                     ),
-                    const SizedBox(height: 12),
-                    Row(
+                    child: const Row(
                       children: [
-                        const Text(
-                          'Gender:',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: _textColor,
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        ChoiceChip(
-                          selected: _gender == 'Male',
-                          label: const Text('Male'),
-                          onSelected: (_) => setState(() => _gender = 'Male'),
-                          selectedColor: _primaryColor,
-                          labelStyle: TextStyle(
-                            color: _gender == 'Male'
-                                ? Colors.white
-                                : _textColor,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          selected: _gender == 'Female',
-                          label: const Text('Female'),
-                          onSelected: (_) => setState(() => _gender = 'Female'),
-                          selectedColor: _primaryColor,
-                          labelStyle: TextStyle(
-                            color: _gender == 'Female'
-                                ? Colors.white
-                                : _textColor,
+                        Icon(Icons.lock_outline, color: VSColors.primary),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Google sign-in keeps your profile secure and synced across VivaahSetu web and mobile.',
+                            style: TextStyle(
+                              color: _textSecondaryColor,
+                              fontSize: 12,
+                              height: 1.35,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                  ],
-                  _AuthField(
-                    controller: _email,
-                    hintText: 'Email Address',
-                    icon: Icons.mail_outline,
-                    keyboardType: TextInputType.emailAddress,
                   ),
-                  const SizedBox(height: 12),
-                  _AuthField(
-                    controller: _password,
-                    hintText: 'Password',
-                    icon: Icons.lock_outline,
-                    obscureText: !_showPassword,
-                    trailing: IconButton(
-                      onPressed: () =>
-                          setState(() => _showPassword = !_showPassword),
-                      icon: Icon(
-                        _showPassword
-                            ? Icons.visibility_off_outlined
-                            : Icons.visibility_outlined,
-                        color: _textSecondaryColor,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton(
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _primaryColor,
-                      minimumSize: const Size.fromHeight(52),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    onPressed: (_emailLoading || _googleLoading)
-                        ? null
-                        : _submit,
-                    child: _emailLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : Text(_signup ? 'Create Account' : 'Sign In'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: (_emailLoading || _googleLoading)
-                        ? null
-                        : () => setState(() => _signup = !_signup),
-                    child: Text(
-                      _signup
-                          ? 'Already have an account? Sign In'
-                          : "Don't have an account? Create one",
-                      style: const TextStyle(
-                        color: _primaryColor,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 22),
                   const Text(
-                    'If this email was first created with Google, use Create Account once with the same email to add password sign-in too.',
+                    'Trusted matrimonial experience',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: _textSecondaryColor,
-                      fontSize: 12,
-                      height: 1.5,
+                      color: _textColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 14),
                   Wrap(
                     spacing: 16,
                     runSpacing: 10,
