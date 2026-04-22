@@ -113,6 +113,81 @@ const List<String> _professionOptions = [
   'Other',
 ];
 
+const List<String> _heightOptions = [
+  "4'8\"",
+  "4'9\"",
+  "4'10\"",
+  "4'11\"",
+  "5'0\"",
+  "5'1\"",
+  "5'2\"",
+  "5'3\"",
+  "5'4\"",
+  "5'5\"",
+  "5'6\"",
+  "5'7\"",
+  "5'8\"",
+  "5'9\"",
+  "5'10\"",
+  "5'11\"",
+  "6'0\"",
+  "6'1\"",
+  "6'2\"",
+  "6'3\"",
+  "6'4\"",
+  "6'5\"+",
+];
+
+const List<String> _incomeOptions = [
+  '0-3 LPA',
+  '3-5 LPA',
+  '5-10 LPA',
+  '10-15 LPA',
+  '15-25 LPA',
+  '25-50 LPA',
+  '50 LPA+',
+  'Prefer not to say',
+];
+
+const List<String> _dietOptions = [
+  'Vegetarian',
+  'Non-Vegetarian',
+  'Eggetarian',
+  'Vegan',
+  'Jain',
+];
+
+const List<String> _manglikOptions = [
+  'Manglik',
+  'Non-Manglik',
+  'Anshik Manglik',
+  'Do not know',
+];
+
+const List<String> _familyFinancialStatusOptions = [
+  'Middle Class',
+  'Upper Middle Class',
+  'Affluent',
+  'High Net Worth',
+];
+
+const List<String> _hobbyOptions = [
+  'Travel',
+  'Music',
+  'Reading',
+  'Fitness',
+  'Cooking',
+  'Movies',
+  'Sports',
+  'Art',
+  'Spirituality',
+  'Photography',
+  'Dancing',
+  'Volunteering',
+];
+
+const List<String> _preferenceAnyOptions = ['Any'];
+
 const List<String> _motherTongueOptions = [
   'Hindi',
   'English',
@@ -258,6 +333,28 @@ List<String> _mergeDropdownOptions(
     if ((selectedValue ?? '').trim().isNotEmpty) selectedValue!.trim(),
   }.toList()..sort();
   return merged;
+}
+
+List<String> _withAnyOptions(List<String> options, String? selectedValue) {
+  final merged = _mergeDropdownOptions(<String>[
+    ..._preferenceAnyOptions,
+    ...options,
+  ], selectedValue);
+  merged.remove('Any');
+  return <String>['Any', ...merged];
+}
+
+bool _isAnyPreference(String? value) =>
+    (value ?? '').trim().toLowerCase() == 'any';
+
+List<String> _preferenceList(TextEditingController controller) {
+  final text = controller.text.trim();
+  if (text.isEmpty || _isAnyPreference(text)) return <String>[];
+  return text
+      .split(',')
+      .map((item) => item.trim())
+      .where((item) => item.isNotEmpty && !_isAnyPreference(item))
+      .toList();
 }
 
 Uint8List? _decodeDataImage(String? value) {
@@ -715,6 +812,35 @@ class ApiClient {
     ),
   );
 
+  Future<Map<String, dynamic>> requestConnectionExtension(
+    String token,
+    String connectionId,
+  ) async => _normalizeResponseMap(
+    Map<String, dynamic>.from(
+      await _request(
+            'POST',
+            '/connections/extend/request',
+            token: token,
+            data: {'connection_id': connectionId},
+          )
+          as Map,
+    ),
+  );
+
+  Future<Map<String, dynamic>> approveConnectionExtension(
+    String token,
+    String connectionId,
+  ) async => _normalizeResponseMap(
+    Map<String, dynamic>.from(
+      await _request(
+            'POST',
+            '/connections/extend/approve/$connectionId',
+            token: token,
+          )
+          as Map,
+    ),
+  );
+
   Future<Map<String, dynamic>> profile(String token, String id) async =>
       _normalizeResponseMap(
         Map<String, dynamic>.from(
@@ -1074,25 +1200,6 @@ class _AppRootState extends State<AppRoot> {
     }
 
     bool missingAny(List<String> keys) => firstValue(keys).isEmpty;
-    final partnerPrefs = _asMap(
-      user['partnerPreferences'] ?? user['partner_preferences'],
-    );
-    bool prefMissing(List<String> keys) {
-      for (final key in keys) {
-        final value = partnerPrefs[key];
-        if (value is List) {
-          final hasValue = value
-              .map((item) => item.toString().trim())
-              .where((item) => item.isNotEmpty)
-              .isNotEmpty;
-          if (hasValue) return false;
-        } else if (value?.toString().trim().isNotEmpty == true) {
-          return false;
-        }
-      }
-      return true;
-    }
-
     final gender = user['gender']?.toString().trim().toLowerCase() ?? '';
     final profileRequired =
         user['profile_required'] == true || user['profileRequired'] == true;
@@ -1110,13 +1217,12 @@ class _AppRootState extends State<AppRoot> {
         missingAny(['occupation', 'profession']) ||
         missingAny(['height']) ||
         missingAny(['income']) ||
+        missingAny(['diet']) ||
+        missingAny(['manglik']) ||
         missingAny(['about']) ||
+        missingAny(['hobbies']) ||
         missingAny(['familyDetails', 'family_details']) ||
-        prefMissing(['age_min', 'minAge']) ||
-        prefMissing(['age_max', 'maxAge']) ||
-        prefMissing(['location', 'city']) ||
-        prefMissing(['religion']) ||
-        prefMissing(['caste']) ||
+        missingAny(['familyFinancialStatus', 'family_financial_status']) ||
         !hasPhoto ||
         !(gender == 'male' || gender == 'female');
   }
@@ -1242,7 +1348,11 @@ class _AppRootState extends State<AppRoot> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('auth_token');
       await prefs.remove('user_data');
-      await _firebaseInitFuture.catchError((_) => null);
+      try {
+        await _firebaseInitFuture;
+      } catch (_) {
+        // Logout should still clear the local app session if Firebase init fails.
+      }
       if (FirebaseAuth.instance.currentUser != null) {
         await FirebaseAuth.instance.signOut().catchError((_) => null);
       }
@@ -1751,6 +1861,7 @@ class _ShellPageState extends State<ShellPage> {
       if (index == 2) {
         _chatUnreadCount = 0;
       }
+      _realtimeRevision++;
     });
   }
 
@@ -1763,6 +1874,7 @@ class _ShellPageState extends State<ShellPage> {
         token: widget.token,
         user: widget.user,
         onNavigate: _goToTab,
+        onNotificationPayload: _handleNotificationPayload,
       ),
       ConnectionsTab(
         key: ValueKey('connections-$_realtimeRevision'),
@@ -1851,12 +1963,14 @@ class HomeTab extends StatefulWidget {
     required this.token,
     required this.user,
     required this.onNavigate,
+    required this.onNotificationPayload,
   });
 
   final ApiClient api;
   final String token;
   final Map<String, dynamic> user;
   final void Function(int index) onNavigate;
+  final void Function(String payload) onNotificationPayload;
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -2161,15 +2275,23 @@ class _HomeTabState extends State<HomeTab> {
                                 clipBehavior: Clip.none,
                                 children: [
                                   IconButton(
-                                    onPressed: () {
-                                      Navigator.of(context).push(
-                                        MaterialPageRoute<void>(
-                                          builder: (_) => NotificationsPage(
-                                            api: widget.api,
-                                            token: widget.token,
-                                          ),
-                                        ),
-                                      );
+                                    onPressed: () async {
+                                      final payload =
+                                          await Navigator.of(
+                                            context,
+                                          ).push<String>(
+                                            MaterialPageRoute<String>(
+                                              builder: (_) => NotificationsPage(
+                                                api: widget.api,
+                                                token: widget.token,
+                                              ),
+                                            ),
+                                          );
+                                      if (payload != null &&
+                                          payload.isNotEmpty) {
+                                        widget.onNotificationPayload(payload);
+                                      }
+                                      unawaited(_load());
                                     },
                                     icon: const Icon(
                                       Icons.notifications_none_rounded,
@@ -2411,15 +2533,19 @@ class _HomeTabState extends State<HomeTab> {
                     value: '$_unreadNotifications',
                     label: 'Unread Notifications',
                     color: const Color(0xFFB26A07),
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute<void>(
+                    onTap: () async {
+                      final payload = await Navigator.of(context).push<String>(
+                        MaterialPageRoute<String>(
                           builder: (_) => NotificationsPage(
                             api: widget.api,
                             token: widget.token,
                           ),
                         ),
                       );
+                      if (payload != null && payload.isNotEmpty) {
+                        widget.onNotificationPayload(payload);
+                      }
+                      unawaited(_load());
                     },
                   ),
                 ],
@@ -2877,6 +3003,36 @@ class _BrowseTabState extends State<BrowseTab> {
                 ),
               ),
             ),
+            SizedBox(
+              height: 58,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                children: [
+                  _BrowseSectionChip(
+                    icon: Icons.tune_rounded,
+                    label: 'Search',
+                    value: 'Refine preferences',
+                    selected: _showFilters,
+                    onTap: () => setState(() => _showFilters = true),
+                  ),
+                  const SizedBox(width: 10),
+                  _BrowseSectionChip(
+                    icon: Icons.fiber_new_rounded,
+                    label: 'New',
+                    value: '${_matches.length} added',
+                    onTap: _load,
+                  ),
+                  const SizedBox(width: 10),
+                  _BrowseSectionChip(
+                    icon: Icons.favorite_rounded,
+                    label: 'My Matches',
+                    value: '${_matches.length} profiles',
+                    onTap: _load,
+                  ),
+                ],
+              ),
+            ),
             if (_showFilters)
               Container(
                 margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
@@ -3117,7 +3273,7 @@ class _BrowseTabState extends State<BrowseTab> {
                                           top: Radius.circular(16),
                                         ),
                                       ),
-                                      child: _CoverPhoto(
+                                      child: _PhotoCarousel(
                                         profile: p,
                                         height: 260,
                                         radius: const BorderRadius.vertical(
@@ -3413,6 +3569,15 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                           : DateTime.tryParse(
                               expiresAt,
                             )?.difference(DateTime.now()).inDays;
+                      final connectionId =
+                          (p['connection_id'] ?? p['connectionId'] ?? '')
+                              .toString();
+                      final extensionRequest = _asMap(p['extension_request']);
+                      final extensionPending =
+                          extensionRequest['status']?.toString() == 'pending';
+                      final requestedByMe =
+                          extensionRequest['requested_by']?.toString() ==
+                          (widget.user['id']?.toString() ?? '');
                       return _ConnectionCard(
                         name: p['name']?.toString() ?? 'User',
                         detail1: p['age'] != null
@@ -3458,6 +3623,30 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                               },
                             ),
                             const SizedBox(width: 8),
+                            if (connectionId.isNotEmpty) ...[
+                              _RoundIconButton(
+                                icon: extensionPending && !requestedByMe
+                                    ? Icons.check_circle_outline_rounded
+                                    : Icons.update_rounded,
+                                background: const Color(0xFFFFF4DF),
+                                onTap: () => _run(
+                                  () => extensionPending && !requestedByMe
+                                      ? widget.api.approveConnectionExtension(
+                                          widget.token,
+                                          connectionId,
+                                        )
+                                      : widget.api.requestConnectionExtension(
+                                          widget.token,
+                                          connectionId,
+                                        ),
+                                  extensionPending && !requestedByMe
+                                      ? 'Connection extended by 15 days'
+                                      : 'Extension request sent',
+                                ),
+                                iconColor: const Color(0xFFB26A07),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                             _RoundIconButton(
                               icon: Icons.delete_outline,
                               background: _surfaceColor,
@@ -4177,7 +4366,7 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                     Container(
                       height: 400,
                       color: const Color(0xFFFFF0F0),
-                      child: _CoverPhoto(profile: p, height: 400),
+                      child: _PhotoCarousel(profile: p, height: 400),
                     ),
                     Container(
                       margin: const EdgeInsets.all(16),
@@ -4460,10 +4649,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
   late final TextEditingController _occupation;
   late final TextEditingController _about;
   late final TextEditingController _familyDetails;
+  late final TextEditingController _hobbies;
   late final TextEditingController _phone;
   late final TextEditingController _religion;
   late final TextEditingController _height;
   late final TextEditingController _income;
+  late final TextEditingController _diet;
+  late final TextEditingController _manglik;
+  late final TextEditingController _familyFinancialStatus;
   late final TextEditingController _caste;
   late final TextEditingController _subCaste;
   late final TextEditingController _motherTongue;
@@ -4474,6 +4667,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
   late final TextEditingController _prefProfession;
   late final TextEditingController _prefReligion;
   late final TextEditingController _prefCaste;
+  late final TextEditingController _prefHeightMin;
+  late final TextEditingController _prefHeightMax;
+  late final TextEditingController _prefIncome;
+  late final TextEditingController _prefDiet;
+  late final TextEditingController _prefManglik;
   String _gender = 'Male';
   bool _photoVisible = true;
   bool _saving = false;
@@ -4487,10 +4685,21 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String? _selectedMaritalStatus;
   String? _selectedEducation;
   String? _selectedProfession;
+  String? _selectedHeight;
+  String? _selectedIncome;
+  String? _selectedDiet;
+  String? _selectedManglik;
+  String? _selectedFamilyFinancialStatus;
+  String? _selectedHobby;
   String? _selectedPrefLocation;
   String? _selectedPrefReligion;
   String? _selectedPrefCaste;
   String? _selectedPrefProfession;
+  String? _selectedPrefHeightMin;
+  String? _selectedPrefHeightMax;
+  String? _selectedPrefIncome;
+  String? _selectedPrefDiet;
+  String? _selectedPrefManglik;
   List<String> _availableCastes = const <String>[];
   List<String> _availableSubCastes = const <String>[];
   List<String> _availablePrefCastes = const <String>[];
@@ -4505,11 +4714,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
   String? _cleanSinglePreference(dynamic raw) {
     final values = _asList(raw)
         .map((item) => item.toString().trim())
-        .where((item) => item.isNotEmpty)
+        .where(
+          (item) => item.isNotEmpty && item != '[]' && !_isAnyPreference(item),
+        )
         .toList();
     if (values.isNotEmpty) return values.first;
     final text = raw?.toString().trim() ?? '';
     if (text.isEmpty) return null;
+    if (text == '[]' || _isAnyPreference(text)) return null;
     if (text.contains(',')) {
       final first = text
           .split(',')
@@ -4535,10 +4747,19 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _familyDetails = TextEditingController(
       text: p['familyDetails']?.toString() ?? '',
     );
+    _hobbies = TextEditingController(text: p['hobbies']?.toString() ?? '');
     _phone = TextEditingController(text: p['phone']?.toString() ?? '');
     _religion = TextEditingController(text: p['religion']?.toString() ?? '');
     _height = TextEditingController(text: p['height']?.toString() ?? '');
     _income = TextEditingController(text: p['income']?.toString() ?? '');
+    _diet = TextEditingController(text: p['diet']?.toString() ?? '');
+    _manglik = TextEditingController(text: p['manglik']?.toString() ?? '');
+    _familyFinancialStatus = TextEditingController(
+      text:
+          p['familyFinancialStatus']?.toString() ??
+          p['family_financial_status']?.toString() ??
+          '',
+    );
     _caste = TextEditingController(text: p['caste']?.toString() ?? '');
     _subCaste = TextEditingController(
       text:
@@ -4572,6 +4793,27 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _prefCaste = TextEditingController(
       text: _cleanSinglePreference(prefs['caste']) ?? '',
     );
+    _prefHeightMin = TextEditingController(
+      text:
+          _cleanSinglePreference(prefs['height_min'] ?? prefs['minHeight']) ??
+          'Any',
+    );
+    _prefHeightMax = TextEditingController(
+      text:
+          _cleanSinglePreference(prefs['height_max'] ?? prefs['maxHeight']) ??
+          'Any',
+    );
+    _prefIncome = TextEditingController(
+      text:
+          _cleanSinglePreference(prefs['income'] ?? prefs['income_range']) ??
+          'Any',
+    );
+    _prefDiet = TextEditingController(
+      text: _cleanSinglePreference(prefs['diet']) ?? 'Any',
+    );
+    _prefManglik = TextEditingController(
+      text: _cleanSinglePreference(prefs['manglik']) ?? 'Any',
+    );
     _photos = _photoUrls(p);
     _gender = _normalizeGender(p['gender']);
     _photoVisible =
@@ -4596,18 +4838,56 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _selectedProfession = _occupation.text.trim().isEmpty
         ? null
         : _occupation.text.trim();
-    _selectedPrefLocation = _prefLocation.text.trim().isEmpty
+    _selectedHeight = _height.text.trim().isEmpty ? null : _height.text.trim();
+    _selectedIncome = _income.text.trim().isEmpty ? null : _income.text.trim();
+    _selectedDiet = _diet.text.trim().isEmpty ? null : _diet.text.trim();
+    _selectedManglik = _manglik.text.trim().isEmpty
         ? null
+        : _manglik.text.trim();
+    _selectedFamilyFinancialStatus = _familyFinancialStatus.text.trim().isEmpty
+        ? null
+        : _familyFinancialStatus.text.trim();
+    _selectedHobby = _hobbies.text.trim().isEmpty ? null : _hobbies.text.trim();
+    _selectedPrefLocation = _prefLocation.text.trim().isEmpty
+        ? 'Any'
         : _prefLocation.text.trim();
     _selectedPrefReligion = _prefReligion.text.trim().isEmpty
-        ? null
+        ? 'Any'
         : _prefReligion.text.trim();
     _selectedPrefCaste = _prefCaste.text.trim().isEmpty
-        ? null
+        ? 'Any'
         : _prefCaste.text.trim();
     _selectedPrefProfession = _prefProfession.text.trim().isEmpty
-        ? null
+        ? 'Any'
         : _prefProfession.text.trim();
+    _selectedPrefHeightMin = _prefHeightMin.text.trim().isEmpty
+        ? 'Any'
+        : _prefHeightMin.text.trim();
+    _selectedPrefHeightMax = _prefHeightMax.text.trim().isEmpty
+        ? 'Any'
+        : _prefHeightMax.text.trim();
+    _selectedPrefIncome = _prefIncome.text.trim().isEmpty
+        ? 'Any'
+        : _prefIncome.text.trim();
+    _selectedPrefDiet = _prefDiet.text.trim().isEmpty
+        ? 'Any'
+        : _prefDiet.text.trim();
+    _selectedPrefManglik = _prefManglik.text.trim().isEmpty
+        ? 'Any'
+        : _prefManglik.text.trim();
+    for (final controller in [
+      _prefLocation,
+      _prefReligion,
+      _prefCaste,
+      _prefProfession,
+      _prefHeightMin,
+      _prefHeightMax,
+      _prefIncome,
+      _prefDiet,
+      _prefManglik,
+    ]) {
+      if (controller.text.trim().isEmpty) controller.text = 'Any';
+    }
     if (_selectedReligion != null && _selectedReligion!.isNotEmpty) {
       unawaited(_loadCasteOptions(_selectedReligion!, pref: false));
     }
@@ -4628,10 +4908,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _occupation.dispose();
     _about.dispose();
     _familyDetails.dispose();
+    _hobbies.dispose();
     _phone.dispose();
     _religion.dispose();
     _height.dispose();
     _income.dispose();
+    _diet.dispose();
+    _manglik.dispose();
+    _familyFinancialStatus.dispose();
     _caste.dispose();
     _subCaste.dispose();
     _motherTongue.dispose();
@@ -4642,6 +4926,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _prefProfession.dispose();
     _prefReligion.dispose();
     _prefCaste.dispose();
+    _prefHeightMin.dispose();
+    _prefHeightMax.dispose();
+    _prefIncome.dispose();
+    _prefDiet.dispose();
+    _prefManglik.dispose();
     super.dispose();
   }
 
@@ -4662,13 +4951,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
   }
 
   Future<void> _loadCasteOptions(String religion, {required bool pref}) async {
-    if (religion.trim().isEmpty) {
+    if (religion.trim().isEmpty || _isAnyPreference(religion)) {
       if (!mounted) return;
       setState(() {
         if (pref) {
           _availablePrefCastes = const <String>[];
-          _selectedPrefCaste = null;
-          _prefCaste.clear();
+          _selectedPrefCaste = 'Any';
+          _prefCaste.text = 'Any';
         } else {
           _availableCastes = const <String>[];
           _availableSubCastes = const <String>[];
@@ -4739,8 +5028,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
       requireText('Profession', _occupation);
       requireText('Height', _height);
       requireText('Income', _income);
+      requireText('Diet', _diet);
+      requireText('Manglik status', _manglik);
       requireText('About you', _about);
+      requireText('Hobbies', _hobbies);
       requireText('Family details', _familyDetails);
+      requireText('Family financial status', _familyFinancialStatus);
       requireText('Preferred min age', _prefAgeMin);
       requireText('Preferred max age', _prefAgeMax);
       requireText('Preferred location', _prefLocation);
@@ -4759,11 +5052,6 @@ class _EditProfilePageState extends State<EditProfilePage> {
     setState(() => _saving = true);
     try {
       final city = _city.text.trim();
-      List<String> splitCsv(TextEditingController controller) => controller.text
-          .split(',')
-          .map((item) => item.trim())
-          .where((item) => item.isNotEmpty)
-          .toList();
       await widget.api.updateProfile(widget.token, {
         'name': name,
         'dob': dob,
@@ -4779,26 +5067,36 @@ class _EditProfilePageState extends State<EditProfilePage> {
         'religion': _religion.text.trim(),
         'height': _height.text.trim(),
         'income': _income.text.trim(),
+        'diet': _diet.text.trim(),
+        'manglik': _manglik.text.trim(),
         'caste': _caste.text.trim(),
         'sub_caste': _subCaste.text.trim(),
         'subCaste': _subCaste.text.trim(),
         'mother_tongue': _motherTongue.text.trim(),
         'marital_status': _maritalStatus.text.trim(),
         'about': _about.text.trim(),
+        'hobbies': _hobbies.text.trim(),
         'familyDetails': _familyDetails.text.trim(),
         'family_details': _familyDetails.text.trim(),
+        'familyFinancialStatus': _familyFinancialStatus.text.trim(),
+        'family_financial_status': _familyFinancialStatus.text.trim(),
         'photoVisibility': _photoVisible ? 'yes' : 'no',
         'partner_preferences': {
           'age_min': int.tryParse(_prefAgeMin.text.trim()),
           'minAge': int.tryParse(_prefAgeMin.text.trim()),
           'age_max': int.tryParse(_prefAgeMax.text.trim()),
           'maxAge': int.tryParse(_prefAgeMax.text.trim()),
-          'location': splitCsv(_prefLocation),
-          'city': splitCsv(_prefLocation),
-          'profession': splitCsv(_prefProfession),
-          'occupation': splitCsv(_prefProfession),
-          'religion': splitCsv(_prefReligion),
-          'caste': splitCsv(_prefCaste),
+          'location': _preferenceList(_prefLocation),
+          'city': _preferenceList(_prefLocation),
+          'profession': _preferenceList(_prefProfession),
+          'occupation': _preferenceList(_prefProfession),
+          'religion': _preferenceList(_prefReligion),
+          'caste': _preferenceList(_prefCaste),
+          'height_min': _preferenceList(_prefHeightMin),
+          'height_max': _preferenceList(_prefHeightMax),
+          'income': _preferenceList(_prefIncome),
+          'diet': _preferenceList(_prefDiet),
+          'manglik': _preferenceList(_prefManglik),
         },
       });
       final updated = await widget.api.me(widget.token);
@@ -4873,12 +5171,23 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
   Future<void> _setPrimaryPhoto(int index) async {
     if (index < 0 || index >= _photos.length) return;
+    final selected = _photos[index];
     setState(() => _uploadingPhoto = true);
     try {
-      await widget.api.setPrimaryPhoto(widget.token, index);
+      final ordered = await widget.api.setPrimaryPhoto(widget.token, index);
       final refreshedProfile = await widget.api.me(widget.token);
       if (!mounted) return;
-      setState(() => _photos = _photoUrls(refreshedProfile));
+      setState(() {
+        _photos = ordered.isNotEmpty
+            ? ordered.map((item) => item.toString()).toList()
+            : <String>[
+                selected,
+                ..._photos.where((photo) => photo != selected),
+              ];
+        _photos = _photoUrls(refreshedProfile).isNotEmpty
+            ? _photoUrls(refreshedProfile)
+            : _photos;
+      });
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(refreshedProfile);
       }
@@ -5132,10 +5441,38 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   const SizedBox(height: 16),
                   _LabeledField(label: 'Full Name', controller: _name),
                   const SizedBox(height: 16),
-                  _LabeledField(
-                    label: 'Date of Birth (YYYY-MM-DD)',
+                  TextField(
                     controller: _dob,
-                    hint: '1995-06-15',
+                    keyboardType: TextInputType.datetime,
+                    decoration: InputDecoration(
+                      labelText: 'Date of Birth (YYYY-MM-DD)',
+                      hintText: '1995-06-15',
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.calendar_month_rounded),
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final initial =
+                              DateTime.tryParse(_dob.text.trim()) ??
+                              DateTime(now.year - 25, now.month, now.day);
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: initial,
+                            firstDate: DateTime(1940),
+                            lastDate: DateTime(
+                              now.year - 18,
+                              now.month,
+                              now.day,
+                            ),
+                          );
+                          if (picked == null) return;
+                          setState(() {
+                            _dob.text =
+                                '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                          });
+                        },
+                      ),
+                    ),
+                    onChanged: (_) => setState(() {}),
                   ),
                   const SizedBox(height: 16),
                   _LabeledField(
@@ -5337,9 +5674,66 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  _LabeledField(label: 'Height', controller: _height),
+                  _DropdownField(
+                    label: 'Height',
+                    value: _selectedHeight,
+                    options: _mergeDropdownOptions(
+                      _heightOptions,
+                      _selectedHeight,
+                    ),
+                    hint: 'Select height',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedHeight = value;
+                        _height.text = value ?? '';
+                      });
+                    },
+                  ),
                   const SizedBox(height: 16),
-                  _LabeledField(label: 'Income', controller: _income),
+                  _DropdownField(
+                    label: 'Income',
+                    value: _selectedIncome,
+                    options: _mergeDropdownOptions(
+                      _incomeOptions,
+                      _selectedIncome,
+                    ),
+                    hint: 'Select income',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedIncome = value;
+                        _income.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Diet',
+                    value: _selectedDiet,
+                    options: _mergeDropdownOptions(_dietOptions, _selectedDiet),
+                    hint: 'Select diet',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedDiet = value;
+                        _diet.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Manglik',
+                    value: _selectedManglik,
+                    options: _mergeDropdownOptions(
+                      _manglikOptions,
+                      _selectedManglik,
+                    ),
+                    hint: 'Select manglik status',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedManglik = value;
+                        _manglik.text = value ?? '';
+                      });
+                    },
+                  ),
                 ],
               ),
             ),
@@ -5372,6 +5766,38 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     decoration: const InputDecoration(
                       labelText: 'Family Details',
                     ),
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Hobbies',
+                    value: _selectedHobby,
+                    options: _mergeDropdownOptions(
+                      _hobbyOptions,
+                      _selectedHobby,
+                    ),
+                    hint: 'Select primary hobby',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedHobby = value;
+                        _hobbies.text = value ?? '';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Family Financial Status',
+                    value: _selectedFamilyFinancialStatus,
+                    options: _mergeDropdownOptions(
+                      _familyFinancialStatusOptions,
+                      _selectedFamilyFinancialStatus,
+                    ),
+                    hint: 'Select family financial status',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedFamilyFinancialStatus = value;
+                        _familyFinancialStatus.text = value ?? '';
+                      });
+                    },
                   ),
                 ],
               ),
@@ -5412,16 +5838,16 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   _DropdownField(
                     label: 'Preferred Religion',
                     value: _selectedPrefReligion,
-                    options: _mergeDropdownOptions(
+                    options: _withAnyOptions(
                       _religionOptions,
                       _selectedPrefReligion,
                     ),
-                    hint: 'Select religion',
+                    hint: 'Any religion',
                     onChanged: (value) {
                       setState(() {
                         _selectedPrefReligion = value;
-                        _prefReligion.text = value ?? '';
-                        _selectedPrefCaste = null;
+                        _prefReligion.text = value ?? 'Any';
+                        _selectedPrefCaste = 'Any';
                         _prefCaste.clear();
                       });
                       unawaited(_loadCasteOptions(value ?? '', pref: true));
@@ -5431,17 +5857,19 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   _DropdownField(
                     label: 'Preferred Caste',
                     value: _selectedPrefCaste,
-                    options: _mergeDropdownOptions(
+                    options: _withAnyOptions(
                       _availablePrefCastes,
                       _selectedPrefCaste,
                     ),
-                    hint: _selectedPrefReligion == null
+                    hint:
+                        _selectedPrefReligion == null ||
+                            _isAnyPreference(_selectedPrefReligion)
                         ? 'Select religion first'
                         : 'Select caste',
                     onChanged: (value) {
                       setState(() {
                         _selectedPrefCaste = value;
-                        _prefCaste.text = value ?? '';
+                        _prefCaste.text = value ?? 'Any';
                       });
                     },
                   ),
@@ -5449,15 +5877,15 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   _DropdownField(
                     label: 'Preferred Location',
                     value: _selectedPrefLocation,
-                    options: _mergeDropdownOptions(
+                    options: _withAnyOptions(
                       _stateOptions,
                       _selectedPrefLocation,
                     ),
-                    hint: 'Select state',
+                    hint: 'Any location',
                     onChanged: (value) {
                       setState(() {
                         _selectedPrefLocation = value;
-                        _prefLocation.text = value ?? '';
+                        _prefLocation.text = value ?? 'Any';
                       });
                     },
                   ),
@@ -5465,15 +5893,100 @@ class _EditProfilePageState extends State<EditProfilePage> {
                   _DropdownField(
                     label: 'Preferred Profession',
                     value: _selectedPrefProfession,
-                    options: _mergeDropdownOptions(
+                    options: _withAnyOptions(
                       _professionOptions,
                       _selectedPrefProfession,
                     ),
-                    hint: 'Select profession',
+                    hint: 'Any profession',
                     onChanged: (value) {
                       setState(() {
                         _selectedPrefProfession = value;
-                        _prefProfession.text = value ?? '';
+                        _prefProfession.text = value ?? 'Any';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _DropdownField(
+                          label: 'Preferred Min Height',
+                          value: _selectedPrefHeightMin,
+                          options: _withAnyOptions(
+                            _heightOptions,
+                            _selectedPrefHeightMin,
+                          ),
+                          hint: 'Any',
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedPrefHeightMin = value;
+                              _prefHeightMin.text = value ?? 'Any';
+                            });
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _DropdownField(
+                          label: 'Preferred Max Height',
+                          value: _selectedPrefHeightMax,
+                          options: _withAnyOptions(
+                            _heightOptions,
+                            _selectedPrefHeightMax,
+                          ),
+                          hint: 'Any',
+                          onChanged: (value) {
+                            setState(() {
+                              _selectedPrefHeightMax = value;
+                              _prefHeightMax.text = value ?? 'Any';
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Income',
+                    value: _selectedPrefIncome,
+                    options: _withAnyOptions(
+                      _incomeOptions,
+                      _selectedPrefIncome,
+                    ),
+                    hint: 'Any income',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefIncome = value;
+                        _prefIncome.text = value ?? 'Any';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Diet',
+                    value: _selectedPrefDiet,
+                    options: _withAnyOptions(_dietOptions, _selectedPrefDiet),
+                    hint: 'Any diet',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefDiet = value;
+                        _prefDiet.text = value ?? 'Any';
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Preferred Manglik',
+                    value: _selectedPrefManglik,
+                    options: _withAnyOptions(
+                      _manglikOptions,
+                      _selectedPrefManglik,
+                    ),
+                    hint: 'Any manglik status',
+                    onChanged: (value) {
+                      setState(() {
+                        _selectedPrefManglik = value;
+                        _prefManglik.text = value ?? 'Any';
                       });
                     },
                   ),
@@ -6981,6 +7494,38 @@ class _NotificationsPageState extends State<NotificationsPage> {
     }
   }
 
+  String _payloadFor(Map<String, dynamic> item) {
+    final type = (item['type'] ?? '').toString().toLowerCase();
+    final message = (item['message'] ?? '').toString().toLowerCase();
+    final senderId =
+        (item['sender_id'] ??
+                item['senderId'] ??
+                item['from_user_id'] ??
+                item['fromUserId'] ??
+                '')
+            .toString()
+            .trim();
+    if (type.contains('chat') ||
+        type.contains('message') ||
+        message.contains('message')) {
+      return 'chat:$senderId';
+    }
+    if (type.contains('match') ||
+        type.contains('recommend') ||
+        message.contains('match') ||
+        message.contains('recommend')) {
+      return 'matches';
+    }
+    if (type.contains('connection') ||
+        type.contains('request') ||
+        type.contains('extension') ||
+        message.contains('request') ||
+        message.contains('connected')) {
+      return 'connections';
+    }
+    return 'notifications';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -7008,65 +7553,73 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   final createdAt =
                       item['createdAt']?.toString() ??
                       item['created_at']?.toString();
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
+                  final payload = _payloadFor(item);
+                  return Material(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    child: InkWell(
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: _borderColor),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: _primaryColor.withValues(alpha: 0.12),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: const Icon(
-                            Icons.notifications,
-                            color: _primaryColor,
-                          ),
+                      onTap: () => Navigator.of(context).pop(payload),
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: _borderColor),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                type.replaceAll('_', ' ').toUpperCase(),
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                  color: _textSecondaryColor,
-                                ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: _primaryColor.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                message,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: _textColor,
-                                  fontWeight: FontWeight.w500,
-                                ),
+                              child: const Icon(
+                                Icons.notifications,
+                                color: _primaryColor,
                               ),
-                              if (createdAt != null &&
-                                  createdAt.isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  _formatMessageTime(createdAt),
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: _textSecondaryColor,
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    type.replaceAll('_', ' ').toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: _textSecondaryColor,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ],
-                          ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    message,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: _textColor,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  if (createdAt != null &&
+                                      createdAt.isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _formatMessageTime(createdAt),
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: _textSecondaryColor,
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   );
                 },
@@ -8084,6 +8637,79 @@ class _ConnectionCard extends StatelessWidget {
   }
 }
 
+class _BrowseSectionChip extends StatelessWidget {
+  const _BrowseSectionChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.onTap,
+    this.selected = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final VoidCallback onTap;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: selected ? _primaryColor : Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          width: 168,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: selected ? _primaryColor : _borderColor),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                icon,
+                size: 20,
+                color: selected ? Colors.white : _primaryColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        color: selected ? Colors.white : _textColor,
+                      ),
+                    ),
+                    Text(
+                      value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: selected ? Colors.white70 : _textSecondaryColor,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _RoundIconButton extends StatelessWidget {
   const _RoundIconButton({
     required this.icon,
@@ -8483,6 +9109,191 @@ class _SmartImage extends StatelessWidget {
       height: height,
       fit: fit,
       errorBuilder: (_, __, ___) => fallback(),
+    );
+  }
+}
+
+class _PhotoCarousel extends StatefulWidget {
+  const _PhotoCarousel({
+    required this.profile,
+    required this.height,
+    this.radius = BorderRadius.zero,
+  });
+
+  final Map<String, dynamic> profile;
+  final double height;
+  final BorderRadius radius;
+
+  @override
+  State<_PhotoCarousel> createState() => _PhotoCarouselState();
+}
+
+class _PhotoCarouselState extends State<_PhotoCarousel> {
+  int _index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final photos = _photoUrls(widget.profile);
+    if (photos.isEmpty) {
+      return _CoverPhoto(
+        profile: widget.profile,
+        height: widget.height,
+        radius: widget.radius,
+      );
+    }
+    return ClipRRect(
+      borderRadius: widget.radius,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          PageView.builder(
+            itemCount: photos.length,
+            onPageChanged: (value) => setState(() => _index = value),
+            itemBuilder: (_, index) => GestureDetector(
+              onTap: () => Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      _PhotoViewer(photos: photos, initialIndex: index),
+                ),
+              ),
+              child: _SmartImage(
+                source: photos[index],
+                width: double.infinity,
+                height: widget.height,
+                fit: BoxFit.cover,
+                fallback: () => Container(
+                  color: const Color(0xFFFFF0F0),
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.person,
+                    size: 72,
+                    color: _borderColor,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.transparent, Color(0x33000000)],
+              ),
+            ),
+          ),
+          if (photos.length > 1)
+            Positioned(
+              bottom: 14,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  photos.length,
+                  (dot) => AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: dot == _index ? 18 : 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: dot == _index
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.55),
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          const Positioned(
+            right: 12,
+            bottom: 12,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Color(0x8A000000),
+                borderRadius: BorderRadius.all(Radius.circular(999)),
+              ),
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.zoom_out_map, color: Colors.white, size: 14),
+                    SizedBox(width: 4),
+                    Text(
+                      'Tap to view',
+                      style: TextStyle(color: Colors.white, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoViewer extends StatefulWidget {
+  const _PhotoViewer({required this.photos, required this.initialIndex});
+
+  final List<String> photos;
+  final int initialIndex;
+
+  @override
+  State<_PhotoViewer> createState() => _PhotoViewerState();
+}
+
+class _PhotoViewerState extends State<_PhotoViewer> {
+  late final PageController _controller;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex;
+    _controller = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        title: Text('${_index + 1}/${widget.photos.length}'),
+      ),
+      body: PageView.builder(
+        controller: _controller,
+        itemCount: widget.photos.length,
+        onPageChanged: (value) => setState(() => _index = value),
+        itemBuilder: (_, index) => InteractiveViewer(
+          minScale: 1,
+          maxScale: 4,
+          child: Center(
+            child: _SmartImage(
+              source: widget.photos[index],
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.contain,
+              fallback: () => const Icon(
+                Icons.broken_image_outlined,
+                color: Colors.white54,
+                size: 64,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
