@@ -34,10 +34,8 @@ String? resolveMediaUrl(String baseUrl, String? raw) {
 
 List<String> photoUrls(String baseUrl, Map<String, dynamic> data) {
   final urls = <String>{};
-  for (final item in asList(data['photos'])) {
-    final resolved = resolveMediaUrl(baseUrl, item?.toString());
-    if (resolved != null) urls.add(resolved);
-  }
+  // Keep the backend-selected primary photo first so every screen uses the
+  // same DP after the user changes it from mobile or web.
   for (final candidate in [
     data['photoUrl'],
     data['profilePhoto'],
@@ -49,6 +47,10 @@ List<String> photoUrls(String baseUrl, Map<String, dynamic> data) {
   ]) {
     final preferred = resolveMediaUrl(baseUrl, candidate?.toString());
     if (preferred != null) urls.add(preferred);
+  }
+  for (final item in asList(data['photos'])) {
+    final resolved = resolveMediaUrl(baseUrl, item?.toString());
+    if (resolved != null) urls.add(resolved);
   }
   return urls.toList();
 }

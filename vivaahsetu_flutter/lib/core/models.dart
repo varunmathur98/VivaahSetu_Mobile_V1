@@ -29,10 +29,18 @@ class UserProfile {
 
   factory UserProfile.fromMap(Map<String, dynamic> raw) {
     final id = (raw['id'] ?? raw['_id'] ?? raw['user_id'] ?? '').toString();
-    final occupation = (raw['occupation'] ?? raw['profession'] ?? '').toString();
-    final photosRaw = raw['photos'] is List ? List<dynamic>.from(raw['photos'] as List) : <dynamic>[];
-    final photos = photosRaw.map((item) => item.toString()).where((item) => item.isNotEmpty).toList();
-    final preferredPhoto = (raw['photoUrl'] ?? raw['profile_photo'] ?? raw['profilePhoto'] ?? '').toString();
+    final occupation = (raw['occupation'] ?? raw['profession'] ?? '')
+        .toString();
+    final photosRaw = raw['photos'] is List
+        ? List<dynamic>.from(raw['photos'] as List)
+        : <dynamic>[];
+    final photos = photosRaw
+        .map((item) => item.toString())
+        .where((item) => item.isNotEmpty)
+        .toList();
+    final preferredPhoto =
+        (raw['photoUrl'] ?? raw['profile_photo'] ?? raw['profilePhoto'] ?? '')
+            .toString();
     if (preferredPhoto.isNotEmpty && !photos.contains(preferredPhoto)) {
       photos.insert(0, preferredPhoto);
     }
@@ -70,8 +78,11 @@ class MatchCard {
     return MatchCard(
       profile: UserProfile.fromMap(raw),
       requestSent: (raw['requestSent'] ?? raw['request_sent'] ?? false) == true,
-      requestReceived: (raw['requestReceived'] ?? raw['request_received'] ?? false) == true,
-      alreadyConnected: (raw['alreadyConnected'] ?? raw['already_connected'] ?? false) == true,
+      requestReceived:
+          (raw['requestReceived'] ?? raw['request_received'] ?? false) == true,
+      alreadyConnected:
+          (raw['alreadyConnected'] ?? raw['already_connected'] ?? false) ==
+          true,
     );
   }
 }
@@ -198,9 +209,13 @@ class Plan {
   final String tagline;
 
   factory Plan.fromMap(Map<String, dynamic> raw) {
-    final featureList = raw['features'] is List ? List<dynamic>.from(raw['features'] as List) : <dynamic>[];
-    final available = (raw['available'] ?? raw['is_available_for_checkout'] ?? true) == true;
-    final discounted = raw['discountedPrice'] ?? raw['discounted_price'] ?? raw['price'] ?? 0;
+    final featureList = raw['features'] is List
+        ? List<dynamic>.from(raw['features'] as List)
+        : <dynamic>[];
+    final available =
+        (raw['available'] ?? raw['is_available_for_checkout'] ?? true) == true;
+    final discounted =
+        raw['discountedPrice'] ?? raw['discounted_price'] ?? raw['price'] ?? 0;
     final price = raw['price'] ?? raw['original_price'] ?? discounted;
     return Plan(
       id: (raw['id'] ?? '').toString(),
@@ -232,7 +247,14 @@ class PaymentStatus {
     return PaymentStatus(
       orderId: (raw['orderId'] ?? raw['order_id'] ?? '').toString(),
       status: (raw['status'] ?? 'pending').toString(),
-      paymentLink: (raw['paymentLink'] ?? raw['payment_link'] ?? '').toString(),
+      paymentLink:
+          (raw['paymentLink'] ??
+                  raw['payment_link'] ??
+                  raw['checkoutUrl'] ??
+                  raw['checkout_url'] ??
+                  raw['redirect_url'] ??
+                  '')
+              .toString(),
       message: (raw['message'] ?? '').toString(),
     );
   }

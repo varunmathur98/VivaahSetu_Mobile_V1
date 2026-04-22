@@ -777,6 +777,19 @@ class ApiClient {
     return 0;
   }
 
+  Future<int> markChatRead(String token, String partnerId) async {
+    final response = await _request(
+      'POST',
+      '/chats/$partnerId/mark-read',
+      token: token,
+    );
+    if (response is Map) {
+      final value = response['unreadCount'] ?? response['unread_count'] ?? 0;
+      return (value as num?)?.toInt() ?? 0;
+    }
+    return 0;
+  }
+
   Future<List<String>> castes(String religion) async {
     if (religion.trim().isEmpty) return <String>[];
     try {
@@ -959,7 +972,11 @@ class ApiClient {
       data['orderId'] ??= data['order_id'] ?? data['id'] ?? '';
       data['paymentSessionId'] ??= data['payment_session_id'] ?? '';
       data['paymentLink'] ??=
-          data['payment_link'] ?? data['redirect_url'] ?? '';
+          data['payment_link'] ??
+          data['checkout_url'] ??
+          data['redirect_url'] ??
+          '';
+      data['checkoutUrl'] ??= data['checkout_url'] ?? data['paymentLink'] ?? '';
       data['status'] ??= data['order_status'] ?? 'pending';
       return data;
     }
@@ -1048,14 +1065,59 @@ class _AppRootState extends State<AppRoot> {
   late final ApiClient _api;
 
   bool _needsProfileCompletion(Map<String, dynamic> user) {
-    bool missing(String key) => (user[key]?.toString().trim().isEmpty ?? true);
+    String firstValue(List<String> keys) {
+      for (final key in keys) {
+        final value = user[key]?.toString().trim() ?? '';
+        if (value.isNotEmpty) return value;
+      }
+      return '';
+    }
+
+    bool missingAny(List<String> keys) => firstValue(keys).isEmpty;
+    final partnerPrefs = _asMap(
+      user['partnerPreferences'] ?? user['partner_preferences'],
+    );
+    bool prefMissing(List<String> keys) {
+      for (final key in keys) {
+        final value = partnerPrefs[key];
+        if (value is List) {
+          final hasValue = value
+              .map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .isNotEmpty;
+          if (hasValue) return false;
+        } else if (value?.toString().trim().isNotEmpty == true) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     final gender = user['gender']?.toString().trim().toLowerCase() ?? '';
     final profileRequired =
         user['profile_required'] == true || user['profileRequired'] == true;
+    final hasPhoto = _photoUrls(user).isNotEmpty;
     return profileRequired ||
-        missing('name') ||
-        missing('dob') ||
-        missing('phone') ||
+        missingAny(['name']) ||
+        missingAny(['dob', 'dateOfBirth', 'date_of_birth']) ||
+        missingAny(['phone', 'phoneNumber', 'phone_number']) ||
+        missingAny(['city', 'location']) ||
+        missingAny(['religion']) ||
+        missingAny(['caste']) ||
+        missingAny(['motherTongue', 'mother_tongue']) ||
+        missingAny(['maritalStatus', 'marital_status']) ||
+        missingAny(['education']) ||
+        missingAny(['occupation', 'profession']) ||
+        missingAny(['height']) ||
+        missingAny(['income']) ||
+        missingAny(['about']) ||
+        missingAny(['familyDetails', 'family_details']) ||
+        prefMissing(['age_min', 'minAge']) ||
+        prefMissing(['age_max', 'maxAge']) ||
+        prefMissing(['location', 'city']) ||
+        prefMissing(['religion']) ||
+        prefMissing(['caste']) ||
+        !hasPhoto ||
         !(gender == 'male' || gender == 'female');
   }
 
@@ -1495,6 +1557,7 @@ class _ShellPageState extends State<ShellPage> {
       _handleNotificationPayload,
     );
     unawaited(_connectRealtimeSocket());
+    unawaited(_showDailyRecommendationIfNeeded());
   }
 
   @override
@@ -1519,10 +1582,59 @@ class _ShellPageState extends State<ShellPage> {
       });
       return;
     }
+    if (payload == 'connections') {
+      setState(() {
+        _index = 1;
+        _realtimeRevision++;
+      });
+      return;
+    }
+    if (payload == 'matches' || payload == 'notifications') {
+      setState(() {
+        _index = 0;
+        _realtimeRevision++;
+      });
+      return;
+    }
     setState(() {
       _index = 0;
       _realtimeRevision++;
     });
+  }
+
+  Future<void> _showDailyRecommendationIfNeeded() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getBool('settings_push_notifications') == false) return;
+      final today = DateTime.now().toIso8601String().substring(0, 10);
+      if (prefs.getString('daily_recommendation_notified_on') == today) {
+        return;
+      }
+      await prefs.setString('daily_recommendation_notified_on', today);
+      await Future<void>.delayed(const Duration(seconds: 3));
+      if (!mounted) return;
+      await _showLocalNotification(
+        title: 'Daily VivaahSetu recommendations',
+        body: 'New compatible profiles are ready for you today.',
+        payload: 'matches',
+      );
+    } catch (_) {
+      // Recommendation notifications should never block app startup.
+    }
+  }
+
+  Future<void> _showLocalNotification({
+    required String title,
+    required String body,
+    required String payload,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('settings_push_notifications') == false) return;
+    await VSNotificationService.instance.show(
+      title: title,
+      body: body,
+      payload: payload,
+    );
   }
 
   void _scheduleRealtimeReconnect() {
@@ -1574,7 +1686,7 @@ class _ShellPageState extends State<ShellPage> {
       final content = message['content']?.toString().trim() ?? '';
       if (senderId.isNotEmpty && senderId != myId && _index != 2) {
         unawaited(
-          VSNotificationService.instance.show(
+          _showLocalNotification(
             title: 'New message on VivaahSetu',
             body: content.isEmpty
                 ? 'You received a new chat message.'
@@ -1586,11 +1698,23 @@ class _ShellPageState extends State<ShellPage> {
     } else if (type == 'notification_created') {
       final notification = _asMap(data['notification']);
       final message = notification['message']?.toString().trim() ?? '';
+      final notificationType =
+          notification['type']?.toString().toLowerCase() ?? '';
+      final lowered = message.toLowerCase();
+      final payload =
+          notificationType.contains('chat') || lowered.contains('message')
+          ? 'chat:${notification['sender_id'] ?? notification['senderId'] ?? ''}'
+          : notificationType.contains('connection') ||
+                lowered.contains('request') ||
+                lowered.contains('accepted') ||
+                lowered.contains('connected')
+          ? 'connections'
+          : 'notifications';
       unawaited(
-        VSNotificationService.instance.show(
+        _showLocalNotification(
           title: 'VivaahSetu update',
           body: message.isEmpty ? 'You have a new notification.' : message,
-          payload: 'notifications',
+          payload: payload,
         ),
       );
     }
@@ -3561,17 +3685,39 @@ class _MessagesTabState extends State<MessagesTab> {
     widget.onInitialPartnerConsumed?.call();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ChatPage(
-            api: widget.api,
-            token: widget.token,
-            currentUser: widget.user,
-            partner: partner,
-          ),
-        ),
+      unawaited(
+        Navigator.of(context)
+            .push(
+              MaterialPageRoute<void>(
+                builder: (_) => ChatPage(
+                  api: widget.api,
+                  token: widget.token,
+                  currentUser: widget.user,
+                  partner: partner,
+                ),
+              ),
+            )
+            .then((_) {
+              if (mounted) unawaited(_load());
+            }),
       );
     });
+  }
+
+  Future<void> _openChat(Map<String, dynamic> partner) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ChatPage(
+          api: widget.api,
+          token: widget.token,
+          currentUser: widget.user,
+          partner: partner,
+        ),
+      ),
+    );
+    if (mounted) {
+      await _load();
+    }
   }
 
   @override
@@ -3671,19 +3817,7 @@ class _MessagesTabState extends State<MessagesTab> {
                           ),
                         ],
                       ),
-                      onTap: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) => ChatPage(
-                              api: widget.api,
-                              token: widget.token,
-                              currentUser: widget.user,
-                              partner: p,
-                            ),
-                          ),
-                        );
-                        unawaited(_load());
-                      },
+                      onTap: () => unawaited(_openChat(p)),
                     ),
                   );
                 },
@@ -4586,31 +4720,38 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final phone = _phone.text.trim();
     final age = _age(dob);
     if (widget.requireProfileCompletion) {
-      if (name.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter your full name.')),
-        );
-        return;
+      final missing = <String>[];
+      void requireText(String label, TextEditingController controller) {
+        if (controller.text.trim().isEmpty) missing.add(label);
       }
-      if (dob.isEmpty || age == null) {
+
+      if (name.isEmpty) missing.add('Full name');
+      if (dob.isEmpty || age == null) missing.add('Valid date of birth');
+      if (phone.isEmpty) missing.add('Phone number');
+      if (!_genderOptions.contains(_gender)) missing.add('Gender');
+      requireText('City', _city);
+      requireText('Religion', _religion);
+      requireText('Caste', _caste);
+      requireText('Sub-caste', _subCaste);
+      requireText('Mother tongue', _motherTongue);
+      requireText('Marital status', _maritalStatus);
+      requireText('Education', _education);
+      requireText('Profession', _occupation);
+      requireText('Height', _height);
+      requireText('Income', _income);
+      requireText('About you', _about);
+      requireText('Family details', _familyDetails);
+      requireText('Preferred min age', _prefAgeMin);
+      requireText('Preferred max age', _prefAgeMax);
+      requireText('Preferred location', _prefLocation);
+      requireText('Preferred religion', _prefReligion);
+      requireText('Preferred caste', _prefCaste);
+      if (_photos.isEmpty) missing.add('At least one photo');
+      if (missing.isNotEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Please enter a valid date of birth in YYYY-MM-DD format.',
-            ),
+          SnackBar(
+            content: Text('Please complete: ${missing.take(4).join(', ')}'),
           ),
-        );
-        return;
-      }
-      if (phone.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter your phone number.')),
-        );
-        return;
-      }
-      if (!_genderOptions.contains(_gender)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please select your gender.')),
         );
         return;
       }
@@ -4623,7 +4764,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
           .map((item) => item.trim())
           .where((item) => item.isNotEmpty)
           .toList();
-      final updated = await widget.api.updateProfile(widget.token, {
+      await widget.api.updateProfile(widget.token, {
         'name': name,
         'dob': dob,
         'date_of_birth': dob,
@@ -4649,13 +4790,18 @@ class _EditProfilePageState extends State<EditProfilePage> {
         'photoVisibility': _photoVisible ? 'yes' : 'no',
         'partner_preferences': {
           'age_min': int.tryParse(_prefAgeMin.text.trim()),
+          'minAge': int.tryParse(_prefAgeMin.text.trim()),
           'age_max': int.tryParse(_prefAgeMax.text.trim()),
+          'maxAge': int.tryParse(_prefAgeMax.text.trim()),
           'location': splitCsv(_prefLocation),
+          'city': splitCsv(_prefLocation),
           'profession': splitCsv(_prefProfession),
+          'occupation': splitCsv(_prefProfession),
           'religion': splitCsv(_prefReligion),
           'caste': splitCsv(_prefCaste),
         },
       });
+      final updated = await widget.api.me(widget.token);
       if (!mounted) return;
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(updated);
@@ -4681,10 +4827,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
     if (picked == null) return;
     setState(() => _uploadingPhoto = true);
     try {
-      final photos = await widget.api.uploadPhoto(widget.token, picked.path);
+      await widget.api.uploadPhoto(widget.token, picked.path);
       final refreshedProfile = await widget.api.me(widget.token);
       if (!mounted) return;
-      setState(() => _photos = photos.cast<String>());
+      setState(() => _photos = _photoUrls(refreshedProfile));
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(refreshedProfile);
       }
@@ -4705,10 +4851,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
     if (index < 0 || index >= _photos.length) return;
     setState(() => _uploadingPhoto = true);
     try {
-      final photos = await widget.api.deletePhoto(widget.token, index);
+      await widget.api.deletePhoto(widget.token, index);
       final refreshedProfile = await widget.api.me(widget.token);
       if (!mounted) return;
-      setState(() => _photos = photos.cast<String>());
+      setState(() => _photos = _photoUrls(refreshedProfile));
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(refreshedProfile);
       }
@@ -4729,10 +4875,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
     if (index < 0 || index >= _photos.length) return;
     setState(() => _uploadingPhoto = true);
     try {
-      final photos = await widget.api.setPrimaryPhoto(widget.token, index);
+      await widget.api.setPrimaryPhoto(widget.token, index);
       final refreshedProfile = await widget.api.me(widget.token);
       if (!mounted) return;
-      setState(() => _photos = photos.cast<String>());
+      setState(() => _photos = _photoUrls(refreshedProfile));
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(refreshedProfile);
       }
@@ -4781,7 +4927,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     ),
                     SizedBox(height: 8),
                     Text(
-                      'Please fill in your name, date of birth, phone number, and gender first.',
+                      'Please fill every profile field and upload at least one photo before entering the app.',
                       style: TextStyle(
                         fontSize: 13,
                         color: _textSecondaryColor,
@@ -5929,7 +6075,7 @@ class _ChatPageState extends State<ChatPage> {
             ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       if (!mounted) return;
       _mergeServerMessages(serverMessages);
-      _sendMarkRead();
+      unawaited(_markThreadRead());
     } finally {
       if (!silent && mounted) setState(() => _loading = false);
     }
@@ -6009,6 +6155,16 @@ class _ChatPageState extends State<ChatPage> {
     } catch (_) {}
   }
 
+  Future<void> _markThreadRead() async {
+    _sendMarkRead();
+    if (_partnerId.isEmpty) return;
+    try {
+      await widget.api.markChatRead(widget.token, _partnerId);
+    } catch (_) {
+      // The socket path still handles read state when REST is temporarily down.
+    }
+  }
+
   void _scheduleReconnect() {
     if (!_shouldReconnect) return;
     _reconnectTimer?.cancel();
@@ -6040,7 +6196,7 @@ class _ChatPageState extends State<ChatPage> {
         _appendServerMessage(message);
       }
       if (message.senderId == _partnerId) {
-        _sendMarkRead();
+        unawaited(_markThreadRead());
       }
       return;
     }
@@ -6070,7 +6226,7 @@ class _ChatPageState extends State<ChatPage> {
       _reconnectAttempt = 0;
       _reconnectTimer?.cancel();
       setState(() => _socketConnected = true);
-      _sendMarkRead();
+      unawaited(_markThreadRead());
       socket.listen(
         _handleSocketEvent,
         onDone: () {
@@ -6163,13 +6319,45 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  void _insertEmoji(String emoji) {
+    final selection = _text.selection;
+    final current = _text.text;
+    final start = selection.start < 0 ? current.length : selection.start;
+    final end = selection.end < 0 ? current.length : selection.end;
+    final next = current.replaceRange(start, end, emoji);
+    _text.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start + emoji.length),
+    );
+  }
+
+  bool _isSameLocalDay(String? a, String? b) {
+    final first = a == null ? null : DateTime.tryParse(a)?.toLocal();
+    final second = b == null ? null : DateTime.tryParse(b)?.toLocal();
+    if (first == null || second == null) return false;
+    return first.year == second.year &&
+        first.month == second.month &&
+        first.day == second.day;
+  }
+
+  String _partnerPresenceLabel() {
+    if (_partnerTyping) return 'Typing...';
+    final online =
+        widget.partner['online'] == true || widget.partner['is_online'] == true;
+    if (online) return 'Online';
+    final lastSeen =
+        widget.partner['lastSeen']?.toString() ??
+        widget.partner['last_seen']?.toString() ??
+        '';
+    if (lastSeen.trim().isNotEmpty) {
+      return 'Last seen ${_formatChatDate(lastSeen)} at ${_formatMessageTime(lastSeen)}';
+    }
+    return _socketConnected ? 'Connected securely' : 'Direct message';
+  }
+
   @override
   Widget build(BuildContext context) {
-    final statusLabel = _partnerTyping
-        ? 'Typing...'
-        : _socketConnected
-        ? 'Online'
-        : '';
+    final statusLabel = _partnerPresenceLabel();
     final partnerName = widget.partner['name']?.toString() ?? 'Chat';
     return Scaffold(
       backgroundColor: const Color(0xFFF7EFE8),
@@ -6192,7 +6380,7 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                   Text(
-                    statusLabel.isEmpty ? 'Direct message' : statusLabel,
+                    statusLabel,
                     style: const TextStyle(
                       fontSize: 11,
                       color: _textSecondaryColor,
@@ -6277,103 +6465,145 @@ class _ChatPageState extends State<ChatPage> {
                             message.status == ChatMessageStatus.failed;
                         final sending =
                             message.status == ChatMessageStatus.sending;
-                        return Align(
-                          alignment: mine
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: GestureDetector(
-                            onTap: failed ? () => _retryFailed(message) : null,
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxWidth:
-                                    MediaQuery.sizeOf(context).width * 0.76,
-                              ),
-                              child: Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.fromLTRB(
-                                  14,
-                                  12,
-                                  14,
-                                  10,
+                        final showDate =
+                            index == 0 ||
+                            !_isSameLocalDay(
+                              _messages[index - 1].createdAt,
+                              message.createdAt,
+                            );
+                        return Column(
+                          children: [
+                            if (showDate)
+                              Container(
+                                margin: const EdgeInsets.only(bottom: 14),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 6,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: mine
-                                      ? const Color(0xFF8B0000)
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.only(
-                                    topLeft: const Radius.circular(20),
-                                    topRight: const Radius.circular(20),
-                                    bottomLeft: Radius.circular(mine ? 20 : 6),
-                                    bottomRight: Radius.circular(mine ? 6 : 20),
+                                  color: const Color(0xFFFFF0F0),
+                                  borderRadius: BorderRadius.circular(999),
+                                  border: Border.all(
+                                    color: const Color(0xFFE8DCC8),
                                   ),
-                                  border: mine
-                                      ? null
-                                      : Border.all(
-                                          color: const Color(0xFFE8DCC8),
-                                        ),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x12000000),
-                                      blurRadius: 10,
-                                      offset: Offset(0, 4),
-                                    ),
-                                  ],
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      message.content,
-                                      style: TextStyle(
-                                        color: bubbleTextColor,
-                                        height: 1.35,
-                                      ),
+                                child: Text(
+                                  _formatChatDate(message.createdAt),
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: _primaryColor,
+                                  ),
+                                ),
+                              ),
+                            Align(
+                              alignment: mine
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: GestureDetector(
+                                onTap: failed
+                                    ? () => _retryFailed(message)
+                                    : null,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        MediaQuery.sizeOf(context).width * 0.76,
+                                  ),
+                                  child: Container(
+                                    margin: const EdgeInsets.only(bottom: 12),
+                                    padding: const EdgeInsets.fromLTRB(
+                                      14,
+                                      12,
+                                      14,
+                                      10,
                                     ),
-                                    const SizedBox(height: 4),
-                                    Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          _formatMessageTime(message.createdAt),
-                                          style: TextStyle(
-                                            fontSize: 10,
-                                            color: mine
-                                                ? Colors.white70
-                                                : _textSecondaryColor,
-                                          ),
+                                    decoration: BoxDecoration(
+                                      color: mine
+                                          ? const Color(0xFF8B0000)
+                                          : Colors.white,
+                                      borderRadius: BorderRadius.only(
+                                        topLeft: const Radius.circular(20),
+                                        topRight: const Radius.circular(20),
+                                        bottomLeft: Radius.circular(
+                                          mine ? 20 : 6,
                                         ),
-                                        if (sending) ...[
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            'Sending...',
-                                            style: TextStyle(
-                                              fontSize: 10,
-                                              color: mine
-                                                  ? Colors.white70
-                                                  : _textSecondaryColor,
+                                        bottomRight: Radius.circular(
+                                          mine ? 6 : 20,
+                                        ),
+                                      ),
+                                      border: mine
+                                          ? null
+                                          : Border.all(
+                                              color: const Color(0xFFE8DCC8),
                                             ),
-                                          ),
-                                        ],
-                                        if (failed) ...[
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            'Failed. Tap to retry',
-                                            style: TextStyle(
-                                              fontSize: 10,
-                                              color: mine
-                                                  ? Colors.white70
-                                                  : Colors.red.shade600,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ],
+                                      boxShadow: const [
+                                        BoxShadow(
+                                          color: Color(0x12000000),
+                                          blurRadius: 10,
+                                          offset: Offset(0, 4),
+                                        ),
                                       ],
                                     ),
-                                  ],
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          message.content,
+                                          style: TextStyle(
+                                            color: bubbleTextColor,
+                                            height: 1.35,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              _formatMessageTime(
+                                                message.createdAt,
+                                              ),
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: mine
+                                                    ? Colors.white70
+                                                    : _textSecondaryColor,
+                                              ),
+                                            ),
+                                            if (sending) ...[
+                                              const SizedBox(width: 6),
+                                              Text(
+                                                'Sending...',
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: mine
+                                                      ? Colors.white70
+                                                      : _textSecondaryColor,
+                                                ),
+                                              ),
+                                            ],
+                                            if (failed) ...[
+                                              const SizedBox(width: 6),
+                                              Text(
+                                                'Failed. Tap to retry',
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  color: mine
+                                                      ? Colors.white70
+                                                      : Colors.red.shade600,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         );
                       },
                     ),
@@ -6383,66 +6613,109 @@ class _ChatPageState extends State<ChatPage> {
             top: false,
             child: Container(
               color: const Color(0xFFFFFBF7),
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: const Color(0xFFE8DCC8)),
-                        boxShadow: const [
-                          BoxShadow(
-                            color: Color(0x0F000000),
-                            blurRadius: 10,
-                            offset: Offset(0, 4),
+                  SizedBox(
+                    height: 38,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: const [
+                        '😊',
+                        '❤️',
+                        '🙏',
+                        '👍',
+                        '🌹',
+                        '✨',
+                      ].length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (_, index) {
+                        const emojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
+                        return InkWell(
+                          onTap: () => _insertEmoji(emojis[index]),
+                          borderRadius: BorderRadius.circular(999),
+                          child: Container(
+                            width: 38,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFF0F0),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: const Color(0xFFE8DCC8),
+                              ),
+                            ),
+                            child: Text(
+                              emojis[index],
+                              style: const TextStyle(fontSize: 18),
+                            ),
                           ),
-                        ],
-                      ),
-                      child: TextField(
-                        controller: _text,
-                        decoration: const InputDecoration(
-                          hintText: 'Write a message',
-                          filled: false,
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 14,
-                          ),
-                        ),
-                        minLines: 1,
-                        maxLines: 4,
-                        onSubmitted: (_) => _send(),
-                      ),
+                        );
+                      },
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: FilledButton(
-                      onPressed: _sending ? null : _send,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xFF8B0000),
-                        shape: const CircleBorder(),
-                        padding: EdgeInsets.zero,
-                      ),
-                      child: _sending
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: const Color(0xFFE8DCC8)),
+                            boxShadow: const [
+                              BoxShadow(
+                                color: Color(0x0F000000),
+                                blurRadius: 10,
+                                offset: Offset(0, 4),
                               ),
-                            )
-                          : const Icon(
-                              Icons.send,
-                              color: Colors.white,
-                              size: 20,
+                            ],
+                          ),
+                          child: TextField(
+                            controller: _text,
+                            decoration: const InputDecoration(
+                              hintText: 'Write a message',
+                              filled: false,
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 14,
+                              ),
                             ),
-                    ),
+                            minLines: 1,
+                            maxLines: 4,
+                            onSubmitted: (_) => _send(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: FilledButton(
+                          onPressed: _sending ? null : _send,
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF8B0000),
+                            shape: const CircleBorder(),
+                            padding: EdgeInsets.zero,
+                          ),
+                          child: _sending
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.send,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -8372,10 +8645,35 @@ String _personSummary(Map<String, dynamic> data) {
 }
 
 String _formatMessageTime(String? input) {
-  final date = input == null ? null : DateTime.tryParse(input);
+  final date = input == null ? null : DateTime.tryParse(input)?.toLocal();
   if (date == null) return '';
   final hour = date.hour % 12 == 0 ? 12 : date.hour % 12;
   final minute = date.minute.toString().padLeft(2, '0');
   final period = date.hour >= 12 ? 'PM' : 'AM';
   return '$hour:$minute $period';
+}
+
+String _formatChatDate(String? input) {
+  final date = input == null ? null : DateTime.tryParse(input)?.toLocal();
+  if (date == null) return 'Conversation';
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final valueDay = DateTime(date.year, date.month, date.day);
+  if (valueDay == today) return 'Today';
+  if (valueDay == today.subtract(const Duration(days: 1))) return 'Yesterday';
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  return '${date.day} ${months[date.month - 1]} ${date.year}';
 }
