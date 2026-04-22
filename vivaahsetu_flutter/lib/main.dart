@@ -6917,7 +6917,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 const _SettingsTile(
                   icon: Icons.info_outline,
-                  label: 'App Version 1.0.0',
+                  label: 'App Version 1.0.2',
                 ),
               ],
             ),
