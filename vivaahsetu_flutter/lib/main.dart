@@ -3470,8 +3470,8 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                 fontWeight: FontWeight.w600,
               ),
               tabs: [
-                Tab(text: 'Received (${received.length})'),
                 Tab(text: 'Active (${active.length})'),
+                Tab(text: 'Received (${received.length})'),
                 Tab(text: 'Sent (${sent.length})'),
               ],
             ),
@@ -3482,62 +3482,6 @@ class _ConnectionsTabState extends State<ConnectionsTab>
               child: TabBarView(
                 controller: _tabs,
                 children: [
-                  _ConnectionsPane(
-                    loading: _loading,
-                    items: received,
-                    emptyLabel: 'No received connections',
-                    builder: (item) {
-                      final p = Map<String, dynamic>.from(item as Map);
-                      return _ConnectionCard(
-                        name: p['name']?.toString() ?? 'User',
-                        detail1: p['age'] != null
-                            ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
-                            : (p['city']?.toString() ?? ''),
-                        detail2: p['occupation']?.toString() ?? '',
-                        onTap: () {
-                          Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => MatchProfilePage(
-                                api: widget.api,
-                                token: widget.token,
-                                user: widget.user,
-                                profileId: p['id']?.toString() ?? '',
-                                initialProfile: p,
-                              ),
-                            ),
-                          );
-                        },
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _RoundIconButton(
-                              icon: Icons.check,
-                              background: Colors.green,
-                              onTap: () => _run(
-                                () => widget.api.acceptRequest(
-                                  widget.token,
-                                  p['id']?.toString() ?? '',
-                                ),
-                                'Connection accepted',
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            _RoundIconButton(
-                              icon: Icons.close,
-                              background: Colors.red,
-                              onTap: () => _run(
-                                () => widget.api.rejectRequest(
-                                  widget.token,
-                                  p['id']?.toString() ?? '',
-                                ),
-                                'Request rejected',
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
                   _ConnectionsPane(
                     loading: _loading,
                     items: active,
@@ -3598,13 +3542,69 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                             _RoundIconButton(
                               icon: Icons.delete_outline,
                               background: _surfaceColor,
-                              iconColor: Colors.red,
                               onTap: () => _run(
                                 () => widget.api.removeConnection(
                                   widget.token,
                                   p['id']?.toString() ?? '',
                                 ),
                                 'Connection removed',
+                              ),
+                              iconColor: Colors.red,
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                  _ConnectionsPane(
+                    loading: _loading,
+                    items: received,
+                    emptyLabel: 'No received connections',
+                    builder: (item) {
+                      final p = Map<String, dynamic>.from(item as Map);
+                      return _ConnectionCard(
+                        name: p['name']?.toString() ?? 'User',
+                        detail1: p['age'] != null
+                            ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
+                            : (p['city']?.toString() ?? ''),
+                        detail2: p['occupation']?.toString() ?? '',
+                        onTap: () {
+                          Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => MatchProfilePage(
+                                api: widget.api,
+                                token: widget.token,
+                                user: widget.user,
+                                profileId: p['id']?.toString() ?? '',
+                                initialProfile: p,
+                              ),
+                            ),
+                          );
+                        },
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _RoundIconButton(
+                              icon: Icons.check,
+                              background: Colors.green,
+                              onTap: () => _run(
+                                () => widget.api.acceptRequest(
+                                  widget.token,
+                                  p['id']?.toString() ?? '',
+                                ),
+                                'Connection accepted',
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            _RoundIconButton(
+                              icon: Icons.close,
+                              background: Colors.red,
+                              onTap: () => _run(
+                                () => widget.api.rejectRequest(
+                                  widget.token,
+                                  p['id']?.toString() ?? '',
+                                ),
+                                'Request rejected',
                               ),
                             ),
                           ],
