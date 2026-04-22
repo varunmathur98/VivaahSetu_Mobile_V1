@@ -8,6 +8,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
@@ -2182,499 +2183,525 @@ class _HomeTabState extends State<HomeTab> {
 
     return Scaffold(
       backgroundColor: _postLoginBackground,
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
-          children: [
-            SafeArea(
-              bottom: false,
-              child: Container(
-                padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
-                decoration: BoxDecoration(
-                  gradient: VSGradients.matrimonialHero,
-                  borderRadius: BorderRadius.circular(28),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x249B1233),
-                      blurRadius: 24,
-                      offset: Offset(0, 12),
-                    ),
-                  ],
-                ),
-                child: Stack(
-                  children: [
-                    Positioned(
-                      right: -18,
-                      top: -28,
-                      child: Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          shape: BoxShape.circle,
+      body: VSPageShell(
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+            children: [
+              SafeArea(
+                bottom: false,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
+                  decoration: BoxDecoration(
+                    gradient: VSGradients.matrimonialHero,
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x249B1233),
+                        blurRadius: 24,
+                        offset: Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        right: -18,
+                        top: -28,
+                        child: Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            shape: BoxShape.circle,
+                          ),
                         ),
                       ),
-                    ),
-                    Positioned(
-                      left: -26,
-                      bottom: -44,
-                      child: Container(
-                        width: 150,
-                        height: 150,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.07),
-                          shape: BoxShape.circle,
+                      Positioned(
+                        left: -26,
+                        bottom: -44,
+                        child: Container(
+                          width: 150,
+                          height: 150,
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.07),
+                            shape: BoxShape.circle,
+                          ),
                         ),
                       ),
-                    ),
-                    Column(
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    'Welcome back,',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: Colors.white70,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '$name!',
-                                    style: const TextStyle(
-                                      fontSize: 30,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    todaySubtitle,
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      color: Colors.white70,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                IconButton(
-                                  onPressed: () {
-                                    Navigator.of(context).push(
-                                      MaterialPageRoute<void>(
-                                        builder: (_) => NotificationsPage(
-                                          api: widget.api,
-                                          token: widget.token,
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                  icon: const Icon(
-                                    Icons.notifications_none_rounded,
-                                    color: Colors.white,
-                                    size: 26,
-                                  ),
-                                ),
-                                if (totalInbox > 0)
-                                  Positioned(
-                                    right: 6,
-                                    top: 4,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: _secondaryColor,
-                                        borderRadius: BorderRadius.circular(
-                                          999,
-                                        ),
-                                      ),
-                                      child: Text(
-                                        totalInbox > 99 ? '99+' : '$totalInbox',
-                                        style: const TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w800,
-                                          color: Color(0xFF3A1F1D),
-                                        ),
+                      Column(
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Welcome back,',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.white70,
                                       ),
                                     ),
-                                  ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Row(
-                          children: [
-                            _CircularProfileAvatar(
-                              profile: _profile ?? widget.user,
-                              size: 70,
-                              borderColor: Colors.white24,
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(
-                                        alpha: 0.15,
-                                      ),
-                                      borderRadius: BorderRadius.circular(999),
-                                      border: Border.all(color: Colors.white24),
-                                    ),
-                                    child: Text(
-                                      'Current Plan: $plan',
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '$name!',
                                       style: const TextStyle(
-                                        fontSize: 12,
+                                        fontSize: 30,
                                         fontWeight: FontWeight.w700,
                                         color: Colors.white,
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    'Serious matchmaking, curated for you',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: Colors.white70,
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      todaySubtitle,
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  IconButton(
+                                    onPressed: () {
+                                      Navigator.of(context).push(
+                                        MaterialPageRoute<void>(
+                                          builder: (_) => NotificationsPage(
+                                            api: widget.api,
+                                            token: widget.token,
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                    icon: const Icon(
+                                      Icons.notifications_none_rounded,
+                                      color: Colors.white,
+                                      size: 26,
                                     ),
                                   ),
+                                  if (totalInbox > 0)
+                                    Positioned(
+                                      right: 6,
+                                      top: 4,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 6,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: _secondaryColor,
+                                          borderRadius: BorderRadius.circular(
+                                            999,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          totalInbox > 99
+                                              ? '99+'
+                                              : '$totalInbox',
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                            color: Color(0xFF3A1F1D),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                 ],
                               ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: FilledButton.icon(
-                                onPressed: _openBrowse,
-                                icon: const Icon(
-                                  Icons.auto_awesome_rounded,
-                                  size: 18,
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          Row(
+                            children: [
+                              _CircularProfileAvatar(
+                                profile: _profile ?? widget.user,
+                                size: 70,
+                                borderColor: Colors.white24,
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withValues(
+                                          alpha: 0.15,
+                                        ),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        border: Border.all(
+                                          color: Colors.white24,
+                                        ),
+                                      ),
+                                      child: Text(
+                                        'Current Plan: $plan',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    const Text(
+                                      'Serious matchmaking, curated for you',
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                label: const Text('Browse Matches'),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: Colors.white,
-                                  foregroundColor: _shaadiMaroon,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  onPressed: _openBrowse,
+                                  icon: const Icon(
+                                    Icons.auto_awesome_rounded,
+                                    size: 18,
+                                  ),
+                                  label: const Text('Browse Matches'),
+                                  style: FilledButton.styleFrom(
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: _shaadiMaroon,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              OutlinedButton.icon(
+                                onPressed: _openEditProfile,
+                                icon: const Icon(
+                                  Icons.edit_note_rounded,
+                                  size: 18,
+                                  color: Colors.white,
+                                ),
+                                label: const Text(
+                                  'Edit',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                                style: OutlinedButton.styleFrom(
+                                  side: const BorderSide(color: Colors.white24),
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(14),
                                   ),
+                                  backgroundColor: Colors.white.withValues(
+                                    alpha: 0.12,
+                                  ),
                                 ),
                               ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ).animate().fadeIn(duration: 420.ms).slideY(begin: -0.06, end: 0),
+              const SizedBox(height: 16),
+              if (progress < 100)
+                GestureDetector(
+                  onTap: _openEditProfile,
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x12000000),
+                          blurRadius: 16,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(
+                              Icons.check_circle,
+                              color: _primaryColor,
+                              size: 24,
                             ),
-                            const SizedBox(width: 10),
-                            OutlinedButton.icon(
-                              onPressed: _openEditProfile,
-                              icon: const Icon(
-                                Icons.edit_note_rounded,
-                                size: 18,
-                                color: Colors.white,
-                              ),
-                              label: const Text(
-                                'Edit',
-                                style: TextStyle(color: Colors.white),
-                              ),
-                              style: OutlinedButton.styleFrom(
-                                side: const BorderSide(color: Colors.white24),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
-                                ),
-                                backgroundColor: Colors.white.withValues(
-                                  alpha: 0.12,
-                                ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Complete Your Profile',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: _textColor,
                               ),
                             ),
                           ],
                         ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (progress < 100)
-              GestureDetector(
-                onTap: _openEditProfile,
-                child: Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x12000000),
-                        blurRadius: 16,
-                        offset: Offset(0, 8),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Row(
-                        children: [
-                          Icon(
-                            Icons.check_circle,
-                            color: _primaryColor,
-                            size: 24,
+                        const SizedBox(height: 8),
+                        Text(
+                          '$progress% complete - add more details for better matches!',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            color: _textSecondaryColor,
                           ),
-                          SizedBox(width: 8),
-                          Text(
-                            'Complete Your Profile',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: _textColor,
+                        ),
+                        const SizedBox(height: 16),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: progress / 100,
+                            minHeight: 8,
+                            backgroundColor: _surfaceColor,
+                            valueColor: const AlwaysStoppedAnimation<Color>(
+                              _primaryColor,
                             ),
                           ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '$progress% complete - add more details for better matches!',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: _textSecondaryColor,
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: progress / 100,
-                          minHeight: 8,
-                          backgroundColor: _surfaceColor,
-                          valueColor: const AlwaysStoppedAnimation<Color>(
-                            _primaryColor,
-                          ),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
+              if (progress < 100) const SizedBox(height: 16),
+              const Text(
+                'Your Matchmaking Snapshot',
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: _textColor,
+                ),
               ),
-            if (progress < 100) const SizedBox(height: 16),
-            const Text(
-              'Dashboard',
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                color: _textColor,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                _HomeMetricCard(
-                  icon: Icons.people_alt_rounded,
-                  value: '$count/$max',
-                  label: 'Active Connections',
-                  color: _primaryColor,
-                  onTap: () => widget.onNavigate(1),
-                ),
-                _HomeMetricCard(
-                  icon: Icons.mark_email_unread_outlined,
-                  value: '$receivedCount',
-                  label: 'Requests Received',
-                  color: const Color(0xFF3566D6),
-                  onTap: () => widget.onNavigate(1),
-                ),
-                _HomeMetricCard(
-                  icon: Icons.chat_bubble_outline_rounded,
-                  value: '$_unreadChats',
-                  label: 'Unread Chats',
-                  color: const Color(0xFF2C9A65),
-                  onTap: () => widget.onNavigate(2),
-                ),
-                _HomeMetricCard(
-                  icon: Icons.notifications_active_outlined,
-                  value: '$_unreadNotifications',
-                  label: 'Unread Notifications',
-                  color: const Color(0xFFB26A07),
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => NotificationsPage(
-                          api: widget.api,
-                          token: widget.token,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Recommended Profiles For You',
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: FontWeight.w700,
-                color: _textColor,
-              ),
-            ),
-            const SizedBox(height: 10),
-            if (_loading && _previewMatches.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 18),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_previewMatches.isEmpty)
-              const VSCard(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child: Text(
-                    'No recommendations yet. Complete preferences and try refresh.',
-                    style: TextStyle(fontSize: 14, color: _textSecondaryColor),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  _HomeMetricCard(
+                    icon: Icons.people_alt_rounded,
+                    value: '$count/$max',
+                    label: 'Active Connections',
+                    color: _primaryColor,
+                    onTap: () => widget.onNavigate(1),
                   ),
-                ),
-              )
-            else
-              Column(
-                children: _previewMatches.take(4).map((raw) {
-                  final p = _asMap(raw);
-                  return _HomeProfilePreviewCard(
-                    profile: p,
+                  _HomeMetricCard(
+                    icon: Icons.mark_email_unread_outlined,
+                    value: '$receivedCount',
+                    label: 'Requests Received',
+                    color: const Color(0xFF3566D6),
+                    onTap: () => widget.onNavigate(1),
+                  ),
+                  _HomeMetricCard(
+                    icon: Icons.chat_bubble_outline_rounded,
+                    value: '$_unreadChats',
+                    label: 'Unread Chats',
+                    color: const Color(0xFF2C9A65),
+                    onTap: () => widget.onNavigate(2),
+                  ),
+                  _HomeMetricCard(
+                    icon: Icons.notifications_active_outlined,
+                    value: '$_unreadNotifications',
+                    label: 'Unread Notifications',
+                    color: const Color(0xFFB26A07),
                     onTap: () {
                       Navigator.of(context).push(
                         MaterialPageRoute<void>(
-                          builder: (_) => MatchProfilePage(
+                          builder: (_) => NotificationsPage(
                             api: widget.api,
                             token: widget.token,
-                            user: _profile ?? widget.user,
-                            profileId: p['id']?.toString() ?? '',
-                            initialProfile: p,
                           ),
                         ),
                       );
                     },
-                    onConnect: () async {
-                      final id = p['id']?.toString() ?? '';
-                      if (id.isEmpty) return;
-                      try {
-                        final response = await widget.api.sendRequest(
-                          widget.token,
-                          id,
-                        );
-                        if (!mounted) return;
-                        setState(() {
-                          _previewMatches = _previewMatches.map((item) {
-                            final map = _asMap(item);
-                            if (map['id']?.toString() == id) {
-                              _applyRelationshipStatus(
-                                map,
-                                response['relationshipStatus']?.toString() ??
-                                    'REQUEST_SENT',
-                              );
-                            }
-                            return map;
-                          }).toList();
-                        });
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Connection request sent'),
-                          ),
-                        );
-                        await _load();
-                      } catch (e) {
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              e.toString().replaceFirst('Exception: ', ''),
-                            ),
-                          ),
-                        );
-                      }
-                    },
-                  );
-                }).toList(),
-              ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: _openBrowse,
-                  icon: const Icon(Icons.tune, size: 18),
-                  label: const Text('Open Filters'),
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: _openBrowse,
-                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                  label: const Text('Show More Profiles'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-            GestureDetector(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => ReactSubscriptionPage(
-                      api: widget.api,
-                      token: widget.token,
-                      currentPlan: planRaw,
-                    ),
                   ),
-                );
-              },
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: _primaryColor,
-                  borderRadius: BorderRadius.circular(12),
+                ],
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Handpicked Matches',
+                style: TextStyle(
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  color: _textColor,
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Upgrade to Premium',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                          SizedBox(height: 4),
-                          Text(
-                            sentCount > 0
-                                ? 'You have $sentCount request${sentCount > 1 ? 's' : ''} waiting for response'
-                                : 'Unlock chat, contacts, and more!',
-                            style: TextStyle(fontSize: 14, color: Colors.white),
-                          ),
-                        ],
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Fresh profiles selected from your preferences',
+                style: TextStyle(fontSize: 13, color: _textSecondaryColor),
+              ),
+              const SizedBox(height: 10),
+              if (_loading && _previewMatches.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 18),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_previewMatches.isEmpty)
+                const VSCard(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                    child: Text(
+                      'No recommendations yet. Complete preferences and try refresh.',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: _textSecondaryColor,
                       ),
                     ),
-                    Icon(Icons.arrow_forward, color: Colors.white),
-                  ],
+                  ),
+                )
+              else
+                Column(
+                  children: _previewMatches.take(4).map((raw) {
+                    final p = _asMap(raw);
+                    return _HomeProfilePreviewCard(
+                      profile: p,
+                      onTap: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => MatchProfilePage(
+                              api: widget.api,
+                              token: widget.token,
+                              user: _profile ?? widget.user,
+                              profileId: p['id']?.toString() ?? '',
+                              initialProfile: p,
+                            ),
+                          ),
+                        );
+                      },
+                      onConnect: () async {
+                        final id = p['id']?.toString() ?? '';
+                        if (id.isEmpty) return;
+                        try {
+                          final response = await widget.api.sendRequest(
+                            widget.token,
+                            id,
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _previewMatches = _previewMatches.map((item) {
+                              final map = _asMap(item);
+                              if (map['id']?.toString() == id) {
+                                _applyRelationshipStatus(
+                                  map,
+                                  response['relationshipStatus']?.toString() ??
+                                      'REQUEST_SENT',
+                                );
+                              }
+                              return map;
+                            }).toList();
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Connection request sent'),
+                            ),
+                          );
+                          await _load();
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e.toString().replaceFirst('Exception: ', ''),
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                    );
+                  }).toList(),
+                ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: _openBrowse,
+                    icon: const Icon(Icons.tune, size: 18),
+                    label: const Text('Open Filters'),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _openBrowse,
+                    icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                    label: const Text('Show More Profiles'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              GestureDetector(
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => ReactSubscriptionPage(
+                        api: widget.api,
+                        token: widget.token,
+                        currentPlan: planRaw,
+                      ),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    gradient: VSGradients.matrimonialHero,
+                    borderRadius: BorderRadius.circular(24),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x269B1233),
+                        blurRadius: 22,
+                        offset: Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Upgrade to Premium',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              sentCount > 0
+                                  ? 'You have $sentCount request${sentCount > 1 ? 's' : ''} waiting for response'
+                                  : 'Unlock chat, contacts, and more!',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(Icons.arrow_forward, color: Colors.white),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -7543,9 +7570,20 @@ class _HomeMetricCard extends StatelessWidget {
         width: width,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _borderColor),
+          gradient: const LinearGradient(
+            colors: [Colors.white, VSColors.ivory],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: VSColors.border.withValues(alpha: 0.8)),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x0F5F0924),
+              blurRadius: 18,
+              offset: Offset(0, 8),
+            ),
+          ],
         ),
         child: Row(
           children: [
@@ -7586,7 +7624,7 @@ class _HomeMetricCard extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ).animate().fadeIn(duration: 360.ms).slideY(begin: 0.08, end: 0);
   }
 }
 
@@ -7605,56 +7643,114 @@ class _HomeProfilePreviewCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final alreadyConnected = profile['alreadyConnected'] == true;
     final requestSent = profile['requestSent'] == true;
+    final age = profile['age']?.toString();
+    final city = profile['city']?.toString().trim() ?? '';
+    final occupation = (profile['occupation'] ?? profile['profession'] ?? '')
+        .toString();
+    final religion = profile['religion']?.toString().trim() ?? '';
+    final detailLine = [
+      if (occupation.trim().isNotEmpty) occupation.trim(),
+      if (religion.isNotEmpty) religion,
+    ].join(' • ');
+    final statusLabel = alreadyConnected
+        ? 'Connected'
+        : requestSent
+        ? 'Request Sent'
+        : 'New match';
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _borderColor),
+        gradient: const LinearGradient(
+          colors: [Colors.white, VSColors.ivory],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: VSColors.border.withValues(alpha: 0.78)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x185F0924),
+            blurRadius: 24,
+            offset: Offset(0, 12),
+          ),
+        ],
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(24),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(12),
+                borderRadius: BorderRadius.circular(18),
                 child: SizedBox(
-                  width: 72,
-                  height: 84,
+                  width: 116,
+                  height: 148,
                   child: _CoverPhoto(
                     profile: profile,
-                    height: 84,
-                    radius: BorderRadius.circular(12),
+                    height: 148,
+                    radius: BorderRadius.circular(18),
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    VSStatusBadge(
+                      label: statusLabel,
+                      icon: alreadyConnected
+                          ? Icons.verified_rounded
+                          : requestSent
+                          ? Icons.schedule_send_rounded
+                          : Icons.auto_awesome_rounded,
+                      foreground: alreadyConnected
+                          ? const Color(0xFF217A47)
+                          : VSColors.primary,
+                      background: alreadyConnected
+                          ? const Color(0xFFEAF8EF)
+                          : VSColors.roseMist,
+                    ),
+                    const SizedBox(height: 10),
                     Text(
                       profile['name']?.toString() ?? 'User',
                       style: const TextStyle(
-                        fontSize: 16,
+                        fontSize: 20,
                         fontWeight: FontWeight.w700,
                         color: _textColor,
+                        letterSpacing: -0.2,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 5),
                     Text(
-                      _personSummary(profile),
+                      [
+                        if (age != null && age.isNotEmpty) '$age yrs',
+                        if (city.isNotEmpty) city,
+                      ].join(' • '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: VSColors.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      detailLine.isEmpty
+                          ? 'Profile details available'
+                          : detailLine,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 12,
+                        height: 1.35,
                         color: _textSecondaryColor,
                       ),
                     ),
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 14),
                     Row(
                       children: [
                         OutlinedButton(
@@ -7684,7 +7780,7 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                                 ? 'Connected'
                                 : requestSent
                                 ? 'Sent'
-                                : 'Connect',
+                                : 'Connect Now',
                           ),
                         ),
                       ],
@@ -7696,7 +7792,7 @@ class _HomeProfilePreviewCard extends StatelessWidget {
           ),
         ),
       ),
-    );
+    ).animate().fadeIn(duration: 420.ms).slideX(begin: 0.08, end: 0);
   }
 }
 
