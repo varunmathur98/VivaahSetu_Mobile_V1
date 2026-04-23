@@ -749,8 +749,9 @@ class ApiClient {
     : _dio = Dio(
         BaseOptions(
           baseUrl: '${_baseUrl.replaceAll(RegExp(r'/+$'), '')}/api',
-          connectTimeout: const Duration(seconds: 8),
-          receiveTimeout: const Duration(seconds: 12),
+          connectTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 30),
+          sendTimeout: const Duration(seconds: 20),
           headers: {'Content-Type': 'application/json'},
         ),
       );
@@ -766,6 +767,7 @@ class ApiClient {
     dynamic data,
     Map<String, dynamic>? queryParameters,
     bool allowRetry = true,
+    int transientRetries = 2,
   }) async {
     try {
       final response = await _dio
@@ -781,9 +783,32 @@ class ApiClient {
               },
             ),
           )
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 35));
       return response.data;
     } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final transient =
+          status == 502 ||
+          status == 503 ||
+          status == 504 ||
+          e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout ||
+          e.type == DioExceptionType.connectionError;
+      if (transient && transientRetries > 0) {
+        await Future<void>.delayed(
+          Duration(milliseconds: transientRetries == 2 ? 900 : 1800),
+        );
+        return _request(
+          method,
+          path,
+          token: token,
+          data: data,
+          queryParameters: queryParameters,
+          allowRetry: allowRetry,
+          transientRetries: transientRetries - 1,
+        );
+      }
       if (e.response?.statusCode == 401 && token != null && token.isNotEmpty) {
         if (allowRetry) {
           final refreshedToken = await onSessionRefresh();
@@ -797,6 +822,7 @@ class ApiClient {
               data: data,
               queryParameters: queryParameters,
               allowRetry: false,
+              transientRetries: transientRetries,
             );
           }
         }
@@ -804,7 +830,30 @@ class ApiClient {
       }
       final payload = e.response?.data;
       final detail = payload is Map ? payload['detail']?.toString() : null;
-      throw Exception(detail ?? e.message ?? 'Request failed');
+      throw Exception(
+        detail ??
+            (transient
+                ? 'Server is waking up. Please try again in a moment.'
+                : e.message ?? 'Request failed'),
+      );
+    } on TimeoutException {
+      if (transientRetries > 0) {
+        await Future<void>.delayed(
+          Duration(milliseconds: transientRetries == 2 ? 900 : 1800),
+        );
+        return _request(
+          method,
+          path,
+          token: token,
+          data: data,
+          queryParameters: queryParameters,
+          allowRetry: allowRetry,
+          transientRetries: transientRetries - 1,
+        );
+      }
+      throw Exception(
+        'Server is taking longer than expected. Please try again.',
+      );
     }
   }
 
@@ -2658,7 +2707,7 @@ class _HomeTabState extends State<HomeTab> {
 
     Future<T?> safe<T>(Future<T> Function() action) async {
       try {
-        return await action().timeout(const Duration(seconds: 8));
+        return await action().timeout(const Duration(seconds: 24));
       } catch (_) {
         return null;
       }
@@ -2732,7 +2781,7 @@ class _HomeTabState extends State<HomeTab> {
     try {
       final payload = await widget.api
           .matches(widget.token, _partnerFilters(profile))
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 24));
       if (!mounted) return;
       final map = _asMap(payload);
       setState(() {
@@ -4543,7 +4592,7 @@ class _ConnectionsTabState extends State<ConnectionsTab>
     try {
       final data = await widget.api
           .connections(widget.token)
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 24));
       if (!mounted) return;
       setState(() {
         _data = data;
@@ -5016,7 +5065,7 @@ class _MessagesTabState extends State<MessagesTab> {
     try {
       final data = await widget.api
           .connections(widget.token)
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 24));
       final connections = List<dynamic>.from(
         data['connections'] as List? ?? <dynamic>[],
       );
