@@ -2153,7 +2153,7 @@ class _ShellPageState extends State<ShellPage> {
     _currentUser = _normalizeUserPayload(widget.user);
     unawaited(_refreshUnreadCount());
     _unreadPollTimer = Timer.periodic(
-      const Duration(seconds: 15),
+      const Duration(seconds: 5),
       (_) => unawaited(_refreshUnreadCount()),
     );
     _notificationTapSub = VSNotificationService.instance.taps.listen(
@@ -2510,6 +2510,7 @@ class _ShellPageState extends State<ShellPage> {
         onNotificationPayload: _handleNotificationPayload,
         onUserChanged: _syncUser,
         realtimeRevision: _realtimeRevision,
+        active: _index == 0,
       ),
       ConnectionsTab(
         key: const ValueKey('connections'),
@@ -2517,6 +2518,7 @@ class _ShellPageState extends State<ShellPage> {
         token: widget.token,
         user: _currentUser,
         realtimeRevision: _realtimeRevision,
+        active: _index == 1,
       ),
       MessagesTab(
         key: const ValueKey('messages'),
@@ -2524,6 +2526,7 @@ class _ShellPageState extends State<ShellPage> {
         token: widget.token,
         user: _currentUser,
         realtimeRevision: _realtimeRevision,
+        active: _index == 2,
         initialPartnerId: _pendingChatPartnerId,
         onInitialPartnerConsumed: () {
           if (!mounted) return;
@@ -2603,6 +2606,7 @@ class HomeTab extends StatefulWidget {
     required this.onNotificationPayload,
     required this.onUserChanged,
     required this.realtimeRevision,
+    required this.active,
   });
 
   final ApiClient api;
@@ -2612,6 +2616,7 @@ class HomeTab extends StatefulWidget {
   final void Function(String payload) onNotificationPayload;
   final Future<void> Function(Map<String, dynamic>) onUserChanged;
   final int realtimeRevision;
+  final bool active;
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -2651,16 +2656,18 @@ class _HomeTabState extends State<HomeTab> {
     };
     _loading = false;
     _load(silent: true);
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 20),
-      (_) => _load(silent: true),
-    );
+    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (widget.active) _load(silent: true);
+    });
   }
 
   @override
   void didUpdateWidget(covariant HomeTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.realtimeRevision != widget.realtimeRevision) {
+      unawaited(_load(silent: true));
+    }
+    if (!oldWidget.active && widget.active) {
       unawaited(_load(silent: true));
     }
   }
@@ -3545,7 +3552,7 @@ class _BrowseTabState extends State<BrowseTab> {
     _seedFiltersFromPreferences();
     unawaited(_load());
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 20),
+      const Duration(seconds: 5),
       (_) => _load(silent: true),
     );
   }
@@ -4545,12 +4552,14 @@ class ConnectionsTab extends StatefulWidget {
     required this.token,
     required this.user,
     required this.realtimeRevision,
+    required this.active,
   });
 
   final ApiClient api;
   final String token;
   final Map<String, dynamic> user;
   final int realtimeRevision;
+  final bool active;
 
   @override
   State<ConnectionsTab> createState() => _ConnectionsTabState();
@@ -4587,16 +4596,18 @@ class _ConnectionsTabState extends State<ConnectionsTab>
     };
     _loading = true;
     _load();
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _load(silent: true),
-    );
+    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (widget.active) _load(silent: true);
+    });
   }
 
   @override
   void didUpdateWidget(covariant ConnectionsTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.realtimeRevision != widget.realtimeRevision) {
+      unawaited(_load(silent: true));
+    }
+    if (!oldWidget.active && widget.active) {
       unawaited(_load(silent: true));
     }
   }
@@ -5046,6 +5057,7 @@ class MessagesTab extends StatefulWidget {
     required this.token,
     required this.user,
     required this.realtimeRevision,
+    required this.active,
     this.initialPartnerId,
     this.onInitialPartnerConsumed,
   });
@@ -5054,6 +5066,7 @@ class MessagesTab extends StatefulWidget {
   final String token;
   final Map<String, dynamic> user;
   final int realtimeRevision;
+  final bool active;
   final String? initialPartnerId;
   final VoidCallback? onInitialPartnerConsumed;
 
@@ -5073,16 +5086,18 @@ class _MessagesTabState extends State<MessagesTab> {
   void initState() {
     super.initState();
     _load();
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 15),
-      (_) => _load(silent: true),
-    );
+    _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (widget.active) _load(silent: true);
+    });
   }
 
   @override
   void didUpdateWidget(covariant MessagesTab oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.realtimeRevision != widget.realtimeRevision) {
+      unawaited(_load(silent: true));
+    }
+    if (!oldWidget.active && widget.active) {
       unawaited(_load(silent: true));
     }
   }
@@ -8223,7 +8238,7 @@ class _ChatPageState extends State<ChatPage> {
     _load();
     _connectSocket();
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 8),
+      const Duration(seconds: 2),
       (_) => _load(silent: true),
     );
     _text.addListener(_onTypingChanged);
