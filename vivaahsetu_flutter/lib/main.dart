@@ -2166,6 +2166,19 @@ class _ShellPageState extends State<ShellPage> {
       });
       return;
     }
+    if (payload == 'subscription' || payload == 'upgrade') {
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ReactSubscriptionPage(
+            api: widget.api,
+            token: widget.token,
+            currentPlan:
+                _currentUser['plan']?.toString().toLowerCase() ?? 'free',
+          ),
+        ),
+      );
+      return;
+    }
     if (payload.startsWith('profile:')) {
       final profileId = payload.substring('profile:'.length).trim();
       setState(() {
@@ -2317,6 +2330,12 @@ class _ShellPageState extends State<ShellPage> {
       final payload =
           notificationType.contains('chat') || lowered.contains('message')
           ? 'chat:${notification['sender_id'] ?? notification['senderId'] ?? ''}'
+          : notificationType.contains('upgrade') ||
+                notificationType.contains('offer') ||
+                notificationType.contains('renewal') ||
+                lowered.contains('upgrade') ||
+                lowered.contains('renew')
+          ? 'subscription'
           : notificationType.contains('visitor')
           ? 'profile:${notification['from_user_id'] ?? notification['fromUserId'] ?? ''}'
           : notificationType.contains('connection') ||
@@ -9027,6 +9046,15 @@ class _NotificationsPageState extends State<NotificationsPage> {
         message.contains('recommend')) {
       return 'matches';
     }
+    if (type.contains('upgrade') ||
+        type.contains('offer') ||
+        type.contains('renewal') ||
+        type.contains('plan') ||
+        message.contains('upgrade') ||
+        message.contains('renew') ||
+        message.contains('50% off')) {
+      return 'subscription';
+    }
     if (type.contains('visitor') || message.contains('viewed your profile')) {
       return senderId.isEmpty ? 'notifications' : 'profile:$senderId';
     }
@@ -9038,6 +9066,56 @@ class _NotificationsPageState extends State<NotificationsPage> {
       return 'connections';
     }
     return 'notifications';
+  }
+
+  ({IconData icon, Color color, String title}) _visualFor(
+    String type,
+    String message,
+  ) {
+    final lowered = '$type $message'.toLowerCase();
+    if (lowered.contains('match') || lowered.contains('recommend')) {
+      return (
+        icon: Icons.favorite_rounded,
+        color: const Color(0xFFE3526E),
+        title: 'New match',
+      );
+    }
+    if (lowered.contains('offer') ||
+        lowered.contains('upgrade') ||
+        lowered.contains('renewal') ||
+        lowered.contains('plan')) {
+      return (
+        icon: Icons.local_offer_rounded,
+        color: const Color(0xFFE6A93A),
+        title: 'Premium offer',
+      );
+    }
+    if (lowered.contains('extension') || lowered.contains('connection')) {
+      return (
+        icon: Icons.handshake_rounded,
+        color: const Color(0xFF217A47),
+        title: 'Connection update',
+      );
+    }
+    if (lowered.contains('visitor')) {
+      return (
+        icon: Icons.visibility_rounded,
+        color: const Color(0xFF7C4DFF),
+        title: 'Profile visitor',
+      );
+    }
+    if (lowered.contains('chat') || lowered.contains('message')) {
+      return (
+        icon: Icons.chat_bubble_rounded,
+        color: const Color(0xFF4169A8),
+        title: 'Chat message',
+      );
+    }
+    return (
+      icon: Icons.notifications_active_rounded,
+      color: _primaryColor,
+      title: 'VivaahSetu update',
+    );
   }
 
   Future<void> _approveExtension(String connectionId) async {
@@ -9063,7 +9141,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       backgroundColor: _postLoginBackground,
       appBar: AppBar(title: const Text('Notifications')),
       body: _loading
-          ? const Center(child: CircularProgressIndicator())
+          ? const VSSkeletonLoader(count: 5)
           : _items.isEmpty
           ? const Center(
               child: Text(
@@ -9081,6 +9159,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
                   final item = _asMap(_items[index]);
                   final message = item['message']?.toString() ?? '';
                   final type = item['type']?.toString() ?? 'notification';
+                  final visual = _visualFor(type, message);
                   final createdAt =
                       item['createdAt']?.toString() ??
                       item['created_at']?.toString();
@@ -9104,15 +9183,27 @@ class _NotificationsPageState extends State<NotificationsPage> {
                       !extensionAccepted;
                   return Material(
                     color: Colors.white,
-                    borderRadius: BorderRadius.circular(16),
+                    borderRadius: BorderRadius.circular(20),
                     child: InkWell(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(20),
                       onTap: () => Navigator.of(context).pop(payload),
                       child: Container(
                         padding: const EdgeInsets.all(16),
                         decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
+                          gradient: const LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [Colors.white, Color(0xFFFFFBF4)],
+                          ),
+                          borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: _borderColor),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x0F7C1838),
+                              blurRadius: 18,
+                              offset: Offset(0, 10),
+                            ),
+                          ],
                         ),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -9121,13 +9212,10 @@ class _NotificationsPageState extends State<NotificationsPage> {
                               width: 38,
                               height: 38,
                               decoration: BoxDecoration(
-                                color: _primaryColor.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(10),
+                                color: visual.color.withValues(alpha: 0.13),
+                                borderRadius: BorderRadius.circular(12),
                               ),
-                              child: const Icon(
-                                Icons.notifications,
-                                color: _primaryColor,
-                              ),
+                              child: Icon(visual.icon, color: visual.color),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -9135,11 +9223,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    type.replaceAll('_', ' ').toUpperCase(),
-                                    style: const TextStyle(
+                                    visual.title.toUpperCase(),
+                                    style: TextStyle(
                                       fontSize: 11,
-                                      fontWeight: FontWeight.w700,
-                                      color: _textSecondaryColor,
+                                      fontWeight: FontWeight.w800,
+                                      color: visual.color,
                                     ),
                                   ),
                                   const SizedBox(height: 4),
