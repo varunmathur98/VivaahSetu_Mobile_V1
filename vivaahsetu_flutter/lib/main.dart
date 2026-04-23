@@ -498,10 +498,14 @@ class VSNotificationService {
   VSNotificationService._();
 
   static final VSNotificationService instance = VSNotificationService._();
+  static const String _channelId = 'vivaahsetu_alerts_v2';
+  static const String _channelName = 'VivaahSetu alerts';
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   final StreamController<String> _tapController =
       StreamController<String>.broadcast();
+  final Map<String, DateTime> _recentNotificationKeys = <String, DateTime>{};
+  final List<DateTime> _recentNotificationTimes = <DateTime>[];
   bool _initialized = false;
   int _nextId = 1000;
 
@@ -525,6 +529,22 @@ class VSNotificationService {
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.requestNotificationsPermission();
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(
+          const AndroidNotificationChannel(
+            _channelId,
+            _channelName,
+            description: 'Messages, matches, offers, and connection alerts',
+            importance: Importance.max,
+            playSound: true,
+            enableVibration: true,
+            showBadge: true,
+            audioAttributesUsage: AudioAttributesUsage.notification,
+          ),
+        );
     await FirebaseMessaging.instance.requestPermission(
       alert: true,
       badge: true,
@@ -581,16 +601,57 @@ class VSNotificationService {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool('settings_push_notifications') == false) return;
+    final now = DateTime.now();
+    _recentNotificationKeys.removeWhere(
+      (_, shownAt) => now.difference(shownAt) > const Duration(minutes: 2),
+    );
+    _recentNotificationTimes.removeWhere(
+      (shownAt) => now.difference(shownAt) > const Duration(seconds: 60),
+    );
+    final key = '$title|$body|$payload';
+    if (_recentNotificationKeys.containsKey(key)) return;
+    if (_recentNotificationTimes.length >= 6) {
+      final summaryKey =
+          'VivaahSetu updates|More updates are waiting|notifications';
+      if (_recentNotificationKeys.containsKey(summaryKey)) return;
+      _recentNotificationKeys[summaryKey] = now;
+      _recentNotificationTimes.add(now);
+      const summaryAndroidDetails = AndroidNotificationDetails(
+        _channelId,
+        _channelName,
+        channelDescription: 'Messages, matches, offers, and connection alerts',
+        importance: Importance.max,
+        priority: Priority.max,
+        playSound: true,
+        enableVibration: true,
+        visibility: NotificationVisibility.public,
+        category: AndroidNotificationCategory.status,
+        audioAttributesUsage: AudioAttributesUsage.notification,
+      );
+      await _plugin.show(
+        id: _nextId++,
+        title: 'VivaahSetu updates',
+        body: 'More updates are waiting in your notification center.',
+        notificationDetails: const NotificationDetails(
+          android: summaryAndroidDetails,
+        ),
+        payload: 'notifications',
+      );
+      return;
+    }
+    _recentNotificationKeys[key] = now;
+    _recentNotificationTimes.add(now);
     const androidDetails = AndroidNotificationDetails(
-      'vivaahsetu_realtime',
-      'VivaahSetu updates',
-      channelDescription: 'Connection, chat, and profile updates',
-      importance: Importance.high,
-      priority: Priority.high,
+      _channelId,
+      _channelName,
+      channelDescription: 'Messages, matches, offers, and connection alerts',
+      importance: Importance.max,
+      priority: Priority.max,
       playSound: true,
       enableVibration: true,
       visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.social,
+      audioAttributesUsage: AudioAttributesUsage.notification,
     );
     await _plugin.show(
       id: _nextId++,
@@ -2223,12 +2284,9 @@ class _ShellPageState extends State<ShellPage> {
       await prefs.setString('daily_recommendation_notified_on', today);
       await Future<void>.delayed(const Duration(seconds: 3));
       if (!mounted) return;
+      // The backend stores the digest and emits the actual push/realtime event.
+      // Avoid a second local notification for the same daily reminder.
       unawaited(widget.api.createNotificationDigest(widget.token));
-      await _showLocalNotification(
-        title: 'Daily VivaahSetu recommendations',
-        body: 'New compatible profiles are ready for you today.',
-        payload: 'matches',
-      );
     } catch (_) {
       // Recommendation notifications should never block app startup.
     }
@@ -2300,6 +2358,9 @@ class _ShellPageState extends State<ShellPage> {
     if (decoded is! Map) return;
     final data = _asMap(decoded);
     final type = data['type']?.toString() ?? '';
+    if (type == 'notifications_read') {
+      return;
+    }
     final unread = data['unreadCount'] ?? data['unread_count'];
     if (unread is num && mounted) {
       setState(() => _chatUnreadCount = unread.toInt());
@@ -9141,13 +9202,31 @@ class _NotificationsPageState extends State<NotificationsPage> {
       if (!mounted) return;
       setState(() => _items = merged);
       if (_items.isNotEmpty) {
-        await widget.api.markNotificationsRead(widget.token);
+        unawaited(_markVisibleNotificationsRead());
       }
     } catch (_) {
       if (!mounted) return;
       setState(() => _items = <dynamic>[]);
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _markVisibleNotificationsRead() async {
+    try {
+      await widget.api.markNotificationsRead(widget.token);
+      if (!mounted) return;
+      setState(() {
+        _items = _items.map((item) {
+          final map = Map<String, dynamic>.from(_asMap(item));
+          if (map['id'] != 'chat_unread') {
+            map['read'] = true;
+          }
+          return map;
+        }).toList();
+      });
+    } catch (_) {
+      // Keep the fetched list visible even if the read-sync request fails.
     }
   }
 
