@@ -2153,7 +2153,7 @@ class _ShellPageState extends State<ShellPage> {
     _currentUser = _normalizeUserPayload(widget.user);
     unawaited(_refreshUnreadCount());
     _unreadPollTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(seconds: 15),
       (_) => unawaited(_refreshUnreadCount()),
     );
     _notificationTapSub = VSNotificationService.instance.taps.listen(
@@ -2647,7 +2647,7 @@ class _HomeTabState extends State<HomeTab> {
     _loading = false;
     _load(silent: true);
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(seconds: 20),
       (_) => _load(silent: true),
     );
   }
@@ -3532,7 +3532,7 @@ class _BrowseTabState extends State<BrowseTab> {
     _seedFiltersFromPreferences();
     unawaited(_load());
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(seconds: 20),
       (_) => _load(silent: true),
     );
   }
@@ -4573,7 +4573,7 @@ class _ConnectionsTabState extends State<ConnectionsTab>
     _loading = true;
     _load();
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(seconds: 15),
       (_) => _load(silent: true),
     );
   }
@@ -5049,7 +5049,7 @@ class _MessagesTabState extends State<MessagesTab> {
     super.initState();
     _load();
     _refreshTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(seconds: 15),
       (_) => _load(silent: true),
     );
   }
@@ -8190,7 +8190,7 @@ class _ChatPageState extends State<ChatPage> {
     _load();
     _connectSocket();
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 1),
+      const Duration(seconds: 8),
       (_) => _load(silent: true),
     );
     _text.addListener(_onTypingChanged);
