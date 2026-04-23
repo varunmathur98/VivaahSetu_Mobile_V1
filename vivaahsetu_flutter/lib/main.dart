@@ -2473,7 +2473,7 @@ class _ShellPageState extends State<ShellPage> {
         unawaited(_syncUser(_asMap(data['profile'])));
       }
       if (mounted) {
-        setState(() {});
+        setState(() => _realtimeRevision++);
       }
     }
   }
@@ -2509,18 +2509,21 @@ class _ShellPageState extends State<ShellPage> {
         onNavigate: _goToTab,
         onNotificationPayload: _handleNotificationPayload,
         onUserChanged: _syncUser,
+        realtimeRevision: _realtimeRevision,
       ),
       ConnectionsTab(
         key: const ValueKey('connections'),
         api: widget.api,
         token: widget.token,
         user: _currentUser,
+        realtimeRevision: _realtimeRevision,
       ),
       MessagesTab(
         key: const ValueKey('messages'),
         api: widget.api,
         token: widget.token,
         user: _currentUser,
+        realtimeRevision: _realtimeRevision,
         initialPartnerId: _pendingChatPartnerId,
         onInitialPartnerConsumed: () {
           if (!mounted) return;
@@ -2599,6 +2602,7 @@ class HomeTab extends StatefulWidget {
     required this.onNavigate,
     required this.onNotificationPayload,
     required this.onUserChanged,
+    required this.realtimeRevision,
   });
 
   final ApiClient api;
@@ -2607,6 +2611,7 @@ class HomeTab extends StatefulWidget {
   final void Function(int index) onNavigate;
   final void Function(String payload) onNotificationPayload;
   final Future<void> Function(Map<String, dynamic>) onUserChanged;
+  final int realtimeRevision;
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -2650,6 +2655,14 @@ class _HomeTabState extends State<HomeTab> {
       const Duration(seconds: 20),
       (_) => _load(silent: true),
     );
+  }
+
+  @override
+  void didUpdateWidget(covariant HomeTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.realtimeRevision != widget.realtimeRevision) {
+      unawaited(_load(silent: true));
+    }
   }
 
   @override
@@ -4531,11 +4544,13 @@ class ConnectionsTab extends StatefulWidget {
     required this.api,
     required this.token,
     required this.user,
+    required this.realtimeRevision,
   });
 
   final ApiClient api;
   final String token;
   final Map<String, dynamic> user;
+  final int realtimeRevision;
 
   @override
   State<ConnectionsTab> createState() => _ConnectionsTabState();
@@ -4576,6 +4591,14 @@ class _ConnectionsTabState extends State<ConnectionsTab>
       const Duration(seconds: 15),
       (_) => _load(silent: true),
     );
+  }
+
+  @override
+  void didUpdateWidget(covariant ConnectionsTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.realtimeRevision != widget.realtimeRevision) {
+      unawaited(_load(silent: true));
+    }
   }
 
   @override
@@ -5022,6 +5045,7 @@ class MessagesTab extends StatefulWidget {
     required this.api,
     required this.token,
     required this.user,
+    required this.realtimeRevision,
     this.initialPartnerId,
     this.onInitialPartnerConsumed,
   });
@@ -5029,6 +5053,7 @@ class MessagesTab extends StatefulWidget {
   final ApiClient api;
   final String token;
   final Map<String, dynamic> user;
+  final int realtimeRevision;
   final String? initialPartnerId;
   final VoidCallback? onInitialPartnerConsumed;
 
@@ -5052,6 +5077,14 @@ class _MessagesTabState extends State<MessagesTab> {
       const Duration(seconds: 15),
       (_) => _load(silent: true),
     );
+  }
+
+  @override
+  void didUpdateWidget(covariant MessagesTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.realtimeRevision != widget.realtimeRevision) {
+      unawaited(_load(silent: true));
+    }
   }
 
   @override
