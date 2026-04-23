@@ -1455,10 +1455,12 @@ class VSStartupSplash extends StatelessWidget {
 
 class _AppRootState extends State<AppRoot> {
   bool _loading = true;
+  bool _showStartupSplash = true;
   String? _token;
   Map<String, dynamic>? _user;
   bool _termsAccepted = false;
   bool _logoutInProgress = false;
+  Timer? _startupSplashTimer;
   late final ApiClient _api;
 
   bool _needsProfileCompletion(Map<String, dynamic> user) {
@@ -1505,7 +1507,17 @@ class _AppRootState extends State<AppRoot> {
       onUnauthorized: _logout,
       onSessionRefresh: _refreshSessionFromFirebase,
     );
+    _startupSplashTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (!mounted) return;
+      setState(() => _showStartupSplash = false);
+    });
     _load();
+  }
+
+  @override
+  void dispose() {
+    _startupSplashTimer?.cancel();
+    super.dispose();
   }
 
   String? _extractToken(Map<String, dynamic> payload) {
@@ -1665,7 +1677,7 @@ class _AppRootState extends State<AppRoot> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
+    if (_loading || _showStartupSplash) {
       return const VSStartupSplash();
     }
     if (_token == null || _user == null) {
@@ -3508,7 +3520,11 @@ class _BrowseTabState extends State<BrowseTab> {
       if (!mounted) return;
       setState(() => _matches = matches);
     } catch (e) {
-      if (!silent) _toast(e);
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -4317,7 +4333,11 @@ class _ConnectionsTabState extends State<ConnectionsTab>
         _loading = false;
       });
     } catch (e) {
-      if (!silent) _toast(e);
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -4750,15 +4770,26 @@ class _MessagesTabState extends State<MessagesTab> {
   Map<String, int> _unreadByPartner = <String, int>{};
   Map<String, ChatMessage> _lastMessageByPartner = <String, ChatMessage>{};
   bool _openedInitialPartner = false;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _load(silent: true),
+    );
   }
 
-  Future<void> _load() async {
-    if (_connections.isEmpty) setState(() => _loading = true);
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent && _connections.isEmpty) setState(() => _loading = true);
     try {
       final data = await widget.api
           .connections(widget.token)
@@ -4804,8 +4835,14 @@ class _MessagesTabState extends State<MessagesTab> {
         _lastMessageByPartner = lastByPartner;
       });
       _openInitialPartnerIfNeeded(connections);
+    } catch (e) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (!silent && mounted) setState(() => _loading = false);
     }
   }
 
@@ -4839,7 +4876,7 @@ class _MessagesTabState extends State<MessagesTab> {
               ),
             )
             .then((_) {
-              if (mounted) unawaited(_load());
+              if (mounted) unawaited(_load(silent: true));
             }),
       );
     });
@@ -4857,7 +4894,7 @@ class _MessagesTabState extends State<MessagesTab> {
       ),
     );
     if (mounted) {
-      await _load();
+      await _load(silent: true);
     }
   }
 
@@ -4866,7 +4903,7 @@ class _MessagesTabState extends State<MessagesTab> {
     return Scaffold(
       backgroundColor: _surfaceColor,
       body: RefreshIndicator(
-        onRefresh: _load,
+        onRefresh: () => _load(),
         child: _loading && _connections.isEmpty
             ? const Center(child: CircularProgressIndicator())
             : _connections.isEmpty
@@ -7840,7 +7877,7 @@ class _ChatPageState extends State<ChatPage> {
     _load();
     _connectSocket();
     _pollTimer = Timer.periodic(
-      const Duration(seconds: 6),
+      const Duration(seconds: 1),
       (_) => _load(silent: true),
     );
     _text.addListener(_onTypingChanged);
