@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -611,7 +612,7 @@ class VivaahSetuApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
-        fontFamily: 'sans',
+        textTheme: GoogleFonts.poppinsTextTheme(Theme.of(context).textTheme),
         colorScheme: ColorScheme.fromSeed(
           seedColor: _primaryColor,
           primary: _primaryColor,
@@ -3586,6 +3587,30 @@ class _BrowseTabState extends State<BrowseTab> {
     );
   }
 
+  int? _connectionDaysLeft(Map<String, dynamic> profile) {
+    final serverValue = profile['days_remaining'] ?? profile['daysRemaining'];
+    if (serverValue is num) return serverValue.toInt().clamp(0, 30);
+    final raw = (profile['expiresAt'] ?? profile['expires_at'])?.toString();
+    if (raw == null || raw.trim().isEmpty) return null;
+    final expiry = DateTime.tryParse(raw);
+    if (expiry == null) return null;
+    final seconds = expiry.difference(DateTime.now()).inSeconds;
+    if (seconds <= 0) return 0;
+    final days = (seconds / 86400).ceil();
+    return days.clamp(0, 30);
+  }
+
+  bool _canRequestExtension({
+    required int? daysLeft,
+    required bool extensionPending,
+    required bool extensionApproved,
+    required bool requestedByMe,
+  }) {
+    if (daysLeft == null) return false;
+    if (extensionPending || extensionApproved) return false;
+    return daysLeft < 15;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -4259,6 +4284,30 @@ class _BrowseTabState extends State<BrowseTab> {
   }
 }
 
+int? _connectionDaysLeft(Map<String, dynamic> profile) {
+  final serverValue = profile['days_remaining'] ?? profile['daysRemaining'];
+  if (serverValue is num) return serverValue.toInt().clamp(0, 30);
+  final raw = (profile['expiresAt'] ?? profile['expires_at'])?.toString();
+  if (raw == null || raw.trim().isEmpty) return null;
+  final expiry = DateTime.tryParse(raw);
+  if (expiry == null) return null;
+  final seconds = expiry.difference(DateTime.now()).inSeconds;
+  if (seconds <= 0) return 0;
+  final days = (seconds / 86400).ceil();
+  return days.clamp(0, 30);
+}
+
+bool _canRequestExtension({
+  required int? daysLeft,
+  required bool extensionPending,
+  required bool extensionApproved,
+  required bool requestedByMe,
+}) {
+  if (daysLeft == null) return false;
+  if (extensionPending || extensionApproved) return false;
+  return daysLeft < 15;
+}
+
 class ConnectionsTab extends StatefulWidget {
   const ConnectionsTab({
     super.key,
@@ -4304,8 +4353,8 @@ class _ConnectionsTabState extends State<ConnectionsTab>
       'count': cachedConnections.length,
       'max': 5,
     };
-    _loading = false;
-    _load(silent: true);
+    _loading = true;
+    _load();
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _load(silent: true),
@@ -4464,6 +4513,9 @@ class _ConnectionsTabState extends State<ConnectionsTab>
             ),
             child: TabBar(
               controller: _tabs,
+              isScrollable: true,
+              tabAlignment: TabAlignment.center,
+              labelPadding: const EdgeInsets.symmetric(horizontal: 18),
               labelColor: _primaryColor,
               unselectedLabelColor: _textSecondaryColor,
               indicatorColor: _primaryColor,
@@ -4494,13 +4546,7 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                       if (_relationshipStatus(p).isEmpty) {
                         _applyRelationshipStatus(p, 'CONNECTED');
                       }
-                      final expiresAt = (p['expiresAt'] ?? p['expires_at'])
-                          ?.toString();
-                      final daysLeft = expiresAt == null
-                          ? null
-                          : DateTime.tryParse(
-                              expiresAt,
-                            )?.difference(DateTime.now()).inDays;
+                      final daysLeft = _connectionDaysLeft(p);
                       final connectionId =
                           (p['connection_id'] ?? p['connectionId'] ?? '')
                               .toString();
@@ -4512,6 +4558,14 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                       final requestedByMe =
                           extensionRequest['requested_by']?.toString() ==
                           (widget.user['id']?.toString() ?? '');
+                      final canRequestExtension = _canRequestExtension(
+                        daysLeft: daysLeft,
+                        extensionPending: extensionPending,
+                        extensionApproved: extensionApproved,
+                        requestedByMe: requestedByMe,
+                      );
+                      final canApproveExtension =
+                          extensionPending && !requestedByMe;
                       return _ConnectionCard(
                         profile: p,
                         allowAllPhotos: _isPaidUser(widget.user),
@@ -4535,11 +4589,11 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                         },
                         badge: daysLeft == null
                             ? null
-                            : _TimerBadge(
-                                daysLeft: daysLeft < 0 ? 0 : daysLeft + 1,
-                              ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
+                            : _TimerBadge(daysLeft: daysLeft),
+                        trailing: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          alignment: WrapAlignment.end,
                           children: [
                             _RoundIconButton(
                               icon: Icons.chat_bubble_outline_rounded,
@@ -4558,22 +4612,32 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                                 );
                               },
                             ),
-                            const SizedBox(width: 8),
                             if (connectionId.isNotEmpty) ...[
                               _RoundIconButton(
                                 icon: extensionApproved
                                     ? Icons.verified_rounded
-                                    : extensionPending && !requestedByMe
+                                    : canApproveExtension
                                     ? Icons.check_circle_outline_rounded
+                                    : extensionPending && requestedByMe
+                                    ? Icons.hourglass_top_rounded
                                     : Icons.update_rounded,
                                 background: extensionApproved
                                     ? const Color(0xFFEAF8EF)
-                                    : const Color(0xFFFFF4DF),
+                                    : extensionPending
+                                    ? const Color(0xFFEFF4FF)
+                                    : canRequestExtension
+                                    ? const Color(0xFFFFF4DF)
+                                    : const Color(0xFFF2F2F2),
                                 onTap: extensionApproved
+                                    ? null
+                                    : extensionPending && requestedByMe
+                                    ? null
+                                    : !canApproveExtension &&
+                                          !canRequestExtension
                                     ? null
                                     : () => _runExtension(
                                         connectionId,
-                                        () => extensionPending && !requestedByMe
+                                        () => canApproveExtension
                                             ? widget.api
                                                   .approveConnectionExtension(
                                                     widget.token,
@@ -4584,28 +4648,19 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                                                     widget.token,
                                                     connectionId,
                                                   ),
-                                        extensionPending && !requestedByMe
+                                        canApproveExtension
                                             ? 'Connection extended by 15 days'
                                             : 'Extension request sent',
-                                        approving:
-                                            extensionPending && !requestedByMe,
+                                        approving: canApproveExtension,
                                       ),
                                 iconColor: extensionApproved
                                     ? const Color(0xFF217A47)
-                                    : const Color(0xFFB26A07),
+                                    : extensionPending
+                                    ? const Color(0xFF4169A8)
+                                    : canRequestExtension
+                                    ? const Color(0xFFB26A07)
+                                    : _textSecondaryColor,
                               ),
-                              if (extensionApproved) ...[
-                                const SizedBox(width: 6),
-                                const Text(
-                                  'Accepted',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: Color(0xFF217A47),
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(width: 8),
                             ],
                             _RoundIconButton(
                               icon: Icons.delete_outline,
@@ -10297,75 +10352,111 @@ class _ConnectionCard extends StatelessWidget {
         : (photos.isEmpty ? 0 : 1);
     galleryProfile['canViewAllPhotos'] = allowAllPhotos;
     return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(18),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: _borderColor),
-          ),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 58,
-                height: 68,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(14),
-                  child: _PhotoCarousel(
-                    profile: galleryProfile,
-                    height: 68,
-                    radius: BorderRadius.circular(14),
-                  ),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          elevation: 0,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Colors.white, Color(0xFFFFFBF4)],
                 ),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: VSColors.border),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x0F7C1838),
+                    blurRadius: 18,
+                    offset: Offset(0, 10),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      name,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                        color: _textColor,
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 58,
+                    height: 68,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: _PhotoCarousel(
+                        profile: galleryProfile,
+                        height: 68,
+                        radius: BorderRadius.circular(14),
+                        showTapHint: false,
                       ),
                     ),
-                    if (detail1.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        detail1,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: _textSecondaryColor,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: _textColor,
+                          ),
                         ),
-                      ),
-                    ],
-                    if (detail2.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        detail2,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: _textSecondaryColor,
-                        ),
-                      ),
-                    ],
-                    if (badge != null) ...[const SizedBox(height: 8), badge!],
-                  ],
-                ),
+                        if (detail1.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            detail1,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: _textSecondaryColor,
+                            ),
+                          ),
+                        ],
+                        if (detail2.isNotEmpty) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            detail2,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: _textSecondaryColor,
+                            ),
+                          ),
+                        ],
+                        if (badge != null) ...[
+                          const SizedBox(height: 8),
+                          badge!,
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 132),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: trailing,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 12),
-              trailing,
-            ],
+            ),
           ),
-        ),
-      ),
-    );
+        )
+        .animate()
+        .fadeIn(duration: const Duration(milliseconds: 260))
+        .slideY(
+          begin: 0.035,
+          end: 0,
+          duration: const Duration(milliseconds: 260),
+        );
   }
 }
 
@@ -10477,12 +10568,16 @@ class _TimerBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final urgent = daysLeft <= 3;
+    final urgent = daysLeft <= 5;
+    final displayDays = daysLeft.clamp(0, 30);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: urgent ? Colors.red : _surfaceColor,
-        borderRadius: BorderRadius.circular(8),
+        color: urgent ? const Color(0xFFB42318) : const Color(0xFFFFF4DF),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(
+          color: urgent ? const Color(0xFFB42318) : const Color(0xFFE6A93A),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -10494,10 +10589,10 @@ class _TimerBadge extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Text(
-            daysLeft > 0 ? '$daysLeft days left' : 'Expired',
+            displayDays > 0 ? '$displayDays days left' : 'Expired',
             style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
               color: urgent ? Colors.white : _textColor,
             ),
           ),
@@ -10866,11 +10961,13 @@ class _PhotoCarousel extends StatefulWidget {
     required this.profile,
     required this.height,
     this.radius = BorderRadius.zero,
+    this.showTapHint = true,
   });
 
   final Map<String, dynamic> profile;
   final double height;
   final BorderRadius radius;
+  final bool showTapHint;
 
   @override
   State<_PhotoCarousel> createState() => _PhotoCarouselState();
@@ -11051,32 +11148,33 @@ class _PhotoCarouselState extends State<_PhotoCarousel> {
                 ),
               ),
             ),
-          const Positioned(
-            right: 12,
-            bottom: 12,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Color(0x8A000000),
-                  borderRadius: BorderRadius.all(Radius.circular(999)),
-                ),
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.zoom_out_map, color: Colors.white, size: 14),
-                      SizedBox(width: 4),
-                      Text(
-                        'Tap to view',
-                        style: TextStyle(color: Colors.white, fontSize: 11),
-                      ),
-                    ],
+          if (widget.showTapHint && widget.height >= 120)
+            const Positioned(
+              right: 12,
+              bottom: 12,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: Color(0x8A000000),
+                    borderRadius: BorderRadius.all(Radius.circular(999)),
+                  ),
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.zoom_out_map, color: Colors.white, size: 14),
+                        SizedBox(width: 4),
+                        Text(
+                          'Tap to view',
+                          style: TextStyle(color: Colors.white, fontSize: 11),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
