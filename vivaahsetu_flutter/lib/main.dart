@@ -8122,6 +8122,8 @@ class _ChatPageState extends State<ChatPage> {
   bool _sending = false;
   bool _socketConnected = false;
   bool _partnerTyping = false;
+  String _loadError = '';
+  bool _chatLockedFromServer = false;
   List<ChatMessage> _messages = <ChatMessage>[];
   Timer? _pollTimer;
   WebSocket? _socket;
@@ -8223,8 +8225,24 @@ class _ChatPageState extends State<ChatPage> {
           items.map((item) => ChatMessage.fromMap(_asMap(item))).toList()
             ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
       if (!mounted) return;
+      setState(() {
+        _loadError = '';
+        _chatLockedFromServer = false;
+      });
       _mergeServerMessages(serverMessages);
       unawaited(_markThreadRead());
+    } catch (e) {
+      if (!mounted) return;
+      final message = e.toString().replaceFirst('Exception: ', '');
+      final locked =
+          message.toLowerCase().contains('subscription') ||
+          message.toLowerCase().contains('upgrade') ||
+          message.toLowerCase().contains('active mutual connection') ||
+          message.toLowerCase().contains('only chat');
+      setState(() {
+        _loadError = message;
+        _chatLockedFromServer = locked;
+      });
     } finally {
       if (!silent && mounted) setState(() => _loading = false);
     }
@@ -8558,208 +8576,237 @@ class _ChatPageState extends State<ChatPage> {
                         colors: [Color(0xFFFFFBF7), Color(0xFFF7EFE8)],
                       ),
                     ),
-                    child: ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.fromLTRB(14, 40, 14, 18),
-                      itemCount: _messages.length + (_partnerTyping ? 1 : 0),
-                      itemBuilder: (_, index) {
-                        if (_partnerTyping && index == _messages.length) {
-                          return Align(
-                            alignment: Alignment.centerLeft,
-                            child: Container(
-                              margin: const EdgeInsets.only(bottom: 12),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 10,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: const Color(0xFFE8DCC8),
+                    child: _messages.isEmpty && _loadError.isNotEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Text(
+                                _loadError,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  color: _textSecondaryColor,
+                                  fontWeight: FontWeight.w600,
                                 ),
-                                boxShadow: const [
-                                  BoxShadow(
-                                    color: Color(0x0D000000),
-                                    blurRadius: 10,
-                                    offset: Offset(0, 4),
-                                  ),
-                                ],
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: const [
-                                  Text(
-                                    'Typing',
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      color: _textSecondaryColor,
-                                    ),
-                                  ),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    '...',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: _textSecondaryColor,
-                                    ),
-                                  ),
-                                ],
                               ),
                             ),
-                          );
-                        }
-                        final message = _messages[index];
-                        final mine = message.senderId == _myId;
-                        final bubbleTextColor = mine
-                            ? Colors.white
-                            : Colors.black87;
-                        final failed =
-                            message.status == ChatMessageStatus.failed;
-                        final sending =
-                            message.status == ChatMessageStatus.sending;
-                        final showDate =
-                            index == 0 ||
-                            !_isSameLocalDay(
-                              _messages[index - 1].createdAt,
-                              message.createdAt,
-                            );
-                        return Column(
-                          children: [
-                            if (showDate)
-                              Container(
-                                margin: const EdgeInsets.only(bottom: 14),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFFF0F0),
-                                  borderRadius: BorderRadius.circular(999),
-                                  border: Border.all(
-                                    color: const Color(0xFFE8DCC8),
-                                  ),
-                                ),
-                                child: Text(
-                                  _formatChatDate(message.createdAt),
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: _primaryColor,
-                                  ),
-                                ),
-                              ),
-                            Align(
-                              alignment: mine
-                                  ? Alignment.centerRight
-                                  : Alignment.centerLeft,
-                              child: GestureDetector(
-                                onTap: failed
-                                    ? () => _retryFailed(message)
-                                    : null,
-                                child: ConstrainedBox(
-                                  constraints: BoxConstraints(
-                                    maxWidth:
-                                        MediaQuery.sizeOf(context).width * 0.76,
-                                  ),
+                          )
+                        : ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.fromLTRB(14, 40, 14, 18),
+                            itemCount:
+                                _messages.length + (_partnerTyping ? 1 : 0),
+                            itemBuilder: (_, index) {
+                              if (_partnerTyping && index == _messages.length) {
+                                return Align(
+                                  alignment: Alignment.centerLeft,
                                   child: Container(
                                     margin: const EdgeInsets.only(bottom: 12),
-                                    padding: const EdgeInsets.fromLTRB(
-                                      14,
-                                      12,
-                                      14,
-                                      10,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 14,
+                                      vertical: 10,
                                     ),
                                     decoration: BoxDecoration(
-                                      color: mine
-                                          ? const Color(0xFF8B0000)
-                                          : Colors.white,
-                                      borderRadius: BorderRadius.only(
-                                        topLeft: const Radius.circular(20),
-                                        topRight: const Radius.circular(20),
-                                        bottomLeft: Radius.circular(
-                                          mine ? 20 : 6,
-                                        ),
-                                        bottomRight: Radius.circular(
-                                          mine ? 6 : 20,
-                                        ),
+                                      color: Colors.white,
+                                      borderRadius: BorderRadius.circular(20),
+                                      border: Border.all(
+                                        color: const Color(0xFFE8DCC8),
                                       ),
-                                      border: mine
-                                          ? null
-                                          : Border.all(
-                                              color: const Color(0xFFE8DCC8),
-                                            ),
                                       boxShadow: const [
                                         BoxShadow(
-                                          color: Color(0x12000000),
+                                          color: Color(0x0D000000),
                                           blurRadius: 10,
                                           offset: Offset(0, 4),
                                         ),
                                       ],
                                     ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: const [
                                         Text(
-                                          message.content,
+                                          'Typing',
                                           style: TextStyle(
-                                            color: bubbleTextColor,
-                                            height: 1.35,
+                                            fontSize: 13,
+                                            color: _textSecondaryColor,
                                           ),
                                         ),
-                                        const SizedBox(height: 4),
-                                        Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            Text(
-                                              _formatMessageTime(
-                                                message.createdAt,
-                                              ),
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                color: mine
-                                                    ? Colors.white70
-                                                    : _textSecondaryColor,
-                                              ),
-                                            ),
-                                            if (sending) ...[
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                'Sending...',
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  color: mine
-                                                      ? Colors.white70
-                                                      : _textSecondaryColor,
-                                                ),
-                                              ),
-                                            ],
-                                            if (failed) ...[
-                                              const SizedBox(width: 6),
-                                              Text(
-                                                'Failed. Tap to retry',
-                                                style: TextStyle(
-                                                  fontSize: 10,
-                                                  color: mine
-                                                      ? Colors.white70
-                                                      : Colors.red.shade600,
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ],
+                                        SizedBox(width: 6),
+                                        Text(
+                                          '...',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            color: _textSecondaryColor,
+                                          ),
                                         ),
                                       ],
                                     ),
                                   ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
+                                );
+                              }
+                              final message = _messages[index];
+                              final mine = message.senderId == _myId;
+                              final bubbleTextColor = mine
+                                  ? Colors.white
+                                  : Colors.black87;
+                              final failed =
+                                  message.status == ChatMessageStatus.failed;
+                              final sending =
+                                  message.status == ChatMessageStatus.sending;
+                              final showDate =
+                                  index == 0 ||
+                                  !_isSameLocalDay(
+                                    _messages[index - 1].createdAt,
+                                    message.createdAt,
+                                  );
+                              return Column(
+                                children: [
+                                  if (showDate)
+                                    Container(
+                                      margin: const EdgeInsets.only(bottom: 14),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFFFF0F0),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
+                                        border: Border.all(
+                                          color: const Color(0xFFE8DCC8),
+                                        ),
+                                      ),
+                                      child: Text(
+                                        _formatChatDate(message.createdAt),
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: _primaryColor,
+                                        ),
+                                      ),
+                                    ),
+                                  Align(
+                                    alignment: mine
+                                        ? Alignment.centerRight
+                                        : Alignment.centerLeft,
+                                    child: GestureDetector(
+                                      onTap: failed
+                                          ? () => _retryFailed(message)
+                                          : null,
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          maxWidth:
+                                              MediaQuery.sizeOf(context).width *
+                                              0.76,
+                                        ),
+                                        child: Container(
+                                          margin: const EdgeInsets.only(
+                                            bottom: 12,
+                                          ),
+                                          padding: const EdgeInsets.fromLTRB(
+                                            14,
+                                            12,
+                                            14,
+                                            10,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: mine
+                                                ? const Color(0xFF8B0000)
+                                                : Colors.white,
+                                            borderRadius: BorderRadius.only(
+                                              topLeft: const Radius.circular(
+                                                20,
+                                              ),
+                                              topRight: const Radius.circular(
+                                                20,
+                                              ),
+                                              bottomLeft: Radius.circular(
+                                                mine ? 20 : 6,
+                                              ),
+                                              bottomRight: Radius.circular(
+                                                mine ? 6 : 20,
+                                              ),
+                                            ),
+                                            border: mine
+                                                ? null
+                                                : Border.all(
+                                                    color: const Color(
+                                                      0xFFE8DCC8,
+                                                    ),
+                                                  ),
+                                            boxShadow: const [
+                                              BoxShadow(
+                                                color: Color(0x12000000),
+                                                blurRadius: 10,
+                                                offset: Offset(0, 4),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                message.content,
+                                                style: TextStyle(
+                                                  color: bubbleTextColor,
+                                                  height: 1.35,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    _formatMessageTime(
+                                                      message.createdAt,
+                                                    ),
+                                                    style: TextStyle(
+                                                      fontSize: 10,
+                                                      color: mine
+                                                          ? Colors.white70
+                                                          : _textSecondaryColor,
+                                                    ),
+                                                  ),
+                                                  if (sending) ...[
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      'Sending...',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: mine
+                                                            ? Colors.white70
+                                                            : _textSecondaryColor,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                  if (failed) ...[
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      'Failed. Tap to retry',
+                                                      style: TextStyle(
+                                                        fontSize: 10,
+                                                        color: mine
+                                                            ? Colors.white70
+                                                            : Colors
+                                                                  .red
+                                                                  .shade600,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
                   ),
           ),
           SafeArea(
@@ -8810,7 +8857,7 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ),
                   const SizedBox(height: 8),
-                  if (!_chatUnlocked)
+                  if (!_chatUnlocked || _chatLockedFromServer)
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(14),
@@ -8823,15 +8870,17 @@ class _ChatPageState extends State<ChatPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Subscribe to chat',
+                            'Subscribe or connect to chat',
                             style: TextStyle(
                               fontWeight: FontWeight.w800,
                               color: _textColor,
                             ),
                           ),
                           const SizedBox(height: 4),
-                          const Text(
-                            'Upgrade to Focus to message active connections.',
+                          Text(
+                            _loadError.isNotEmpty
+                                ? _loadError
+                                : 'Upgrade to Focus and keep an active connection to message.',
                             style: TextStyle(
                               fontSize: 12,
                               color: _textSecondaryColor,
