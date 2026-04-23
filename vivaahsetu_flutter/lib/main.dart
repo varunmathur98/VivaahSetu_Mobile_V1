@@ -3206,6 +3206,43 @@ class _HomeTabState extends State<HomeTab> {
                           );
                         }
                       },
+                      onCancel: () async {
+                        final id = p['id']?.toString() ?? '';
+                        if (id.isEmpty) return;
+                        try {
+                          final response = await widget.api.cancelRequest(
+                            widget.token,
+                            id,
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _previewMatches = _previewMatches.map((item) {
+                              final map = _asMap(item);
+                              if (map['id']?.toString() == id) {
+                                _applyRelationshipStatus(
+                                  map,
+                                  response['relationshipStatus']?.toString() ??
+                                      'NONE',
+                                );
+                              }
+                              return map;
+                            }).toList();
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Request cancelled')),
+                          );
+                          await _load();
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e.toString().replaceFirst('Exception: ', ''),
+                              ),
+                            ),
+                          );
+                        }
+                      },
                       onConnect: () async {
                         final id = p['id']?.toString() ?? '';
                         if (id.isEmpty) return;
@@ -3569,6 +3606,30 @@ class _BrowseTabState extends State<BrowseTab> {
       }
       _toast('Connection request sent');
       await _load();
+    } catch (e) {
+      _toast(e);
+    }
+  }
+
+  Future<void> _cancel(String id) async {
+    try {
+      final response = await widget.api.cancelRequest(widget.token, id);
+      if (mounted) {
+        setState(() {
+          _matches = _matches.map((item) {
+            final map = _asMap(item);
+            if (map['id']?.toString() == id) {
+              _applyRelationshipStatus(
+                map,
+                response['relationshipStatus']?.toString() ?? 'NONE',
+              );
+            }
+            return map;
+          }).toList();
+        });
+      }
+      _toast('Request cancelled');
+      await _load(silent: true);
     } catch (e) {
       _toast(e);
     }
@@ -4249,8 +4310,35 @@ class _BrowseTabState extends State<BrowseTab> {
                                           icon: Icons.favorite_border,
                                           text: p['religion'].toString(),
                                         ),
-                                      if (p['requestSent'] != true &&
-                                          p['alreadyConnected'] != true)
+                                      if (p['requestSent'] == true)
+                                        Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 16,
+                                          ),
+                                          child: OutlinedButton.icon(
+                                            onPressed: () => _cancel(
+                                              p['id']?.toString() ?? '',
+                                            ),
+                                            style: OutlinedButton.styleFrom(
+                                              foregroundColor: Colors.red,
+                                              side: const BorderSide(
+                                                color: Colors.redAccent,
+                                              ),
+                                              shape: RoundedRectangleBorder(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                              ),
+                                              minimumSize:
+                                                  const Size.fromHeight(42),
+                                            ),
+                                            icon: const Icon(
+                                              Icons.close_rounded,
+                                              size: 18,
+                                            ),
+                                            label: const Text('Cancel Request'),
+                                          ),
+                                        )
+                                      else if (p['alreadyConnected'] != true)
                                         Padding(
                                           padding: const EdgeInsets.only(
                                             top: 16,
@@ -5418,6 +5506,33 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
     }
   }
 
+  Future<void> _cancelRequest() async {
+    try {
+      final response = await widget.api.cancelRequest(
+        widget.token,
+        widget.profileId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _requestSentLocally = false;
+        final profile = _profile ?? <String, dynamic>{};
+        _applyRelationshipStatus(
+          profile,
+          response['relationshipStatus']?.toString() ?? 'NONE',
+        );
+        _profile = profile;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Request cancelled')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
+  }
+
   Future<void> _acceptRequest() async {
     try {
       final response = await widget.api.acceptRequest(
@@ -5815,30 +5930,42 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                     ),
                     Padding(
                       padding: const EdgeInsets.all(16),
-                      child: FilledButton.icon(
-                        onPressed: (isConnected || requestSent)
-                            ? null
-                            : requestReceived
-                            ? _acceptRequest
-                            : _connect,
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF8B0000),
-                          minimumSize: const Size.fromHeight(48),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        icon: const Icon(Icons.favorite, size: 20),
-                        label: Text(
-                          isConnected
-                              ? 'Already Connected'
-                              : requestSent
-                              ? 'Request Sent'
-                              : requestReceived
-                              ? 'Accept Request'
-                              : 'Send Connection Request',
-                        ),
-                      ),
+                      child: requestSent
+                          ? OutlinedButton.icon(
+                              onPressed: _cancelRequest,
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                side: const BorderSide(color: Colors.redAccent),
+                                minimumSize: const Size.fromHeight(48),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              icon: const Icon(Icons.close_rounded, size: 20),
+                              label: const Text('Cancel Request'),
+                            )
+                          : FilledButton.icon(
+                              onPressed: isConnected
+                                  ? null
+                                  : requestReceived
+                                  ? _acceptRequest
+                                  : _connect,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: const Color(0xFF8B0000),
+                                minimumSize: const Size.fromHeight(48),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              icon: const Icon(Icons.favorite, size: 20),
+                              label: Text(
+                                isConnected
+                                    ? 'Already Connected'
+                                    : requestReceived
+                                    ? 'Accept Request'
+                                    : 'Send Connection Request',
+                              ),
+                            ),
                     ),
                     const SizedBox(height: 24),
                   ],
@@ -9822,18 +9949,20 @@ class _HomeProfilePreviewCard extends StatelessWidget {
     required this.onTap,
     required this.onConnect,
     required this.onAccept,
+    required this.onCancel,
   });
 
   final Map<String, dynamic> profile;
   final VoidCallback? onTap;
   final VoidCallback onConnect;
   final VoidCallback onAccept;
+  final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
-    final alreadyConnected = profile['alreadyConnected'] == true;
-    final requestSent = profile['requestSent'] == true;
-    final requestReceived = profile['requestReceived'] == true;
+    final alreadyConnected = _alreadyConnectedFlag(profile);
+    final requestSent = _requestSentFlag(profile);
+    final requestReceived = _requestReceivedFlag(profile);
     final age = profile['age']?.toString();
     final city = profile['city']?.toString().trim() ?? '';
     final occupation = (profile['occupation'] ?? profile['profession'] ?? '')
@@ -9959,29 +10088,42 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                           child: const Text('View'),
                         ),
                         const SizedBox(width: 8),
-                        FilledButton(
-                          onPressed: (alreadyConnected || requestSent)
-                              ? null
-                              : requestReceived
-                              ? onAccept
-                              : onConnect,
-                          style: FilledButton.styleFrom(
-                            minimumSize: const Size(80, 32),
-                            backgroundColor: _primaryColor,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
+                        if (requestSent)
+                          OutlinedButton.icon(
+                            onPressed: onCancel,
+                            icon: const Icon(Icons.close_rounded, size: 16),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size(84, 32),
+                              foregroundColor: Colors.red,
+                              side: const BorderSide(color: Colors.redAccent),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            label: const Text('Cancel'),
+                          )
+                        else
+                          FilledButton(
+                            onPressed: alreadyConnected
+                                ? null
+                                : requestReceived
+                                ? onAccept
+                                : onConnect,
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size(80, 32),
+                              backgroundColor: _primaryColor,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                            child: Text(
+                              alreadyConnected
+                                  ? 'Connected'
+                                  : requestReceived
+                                  ? 'Accept'
+                                  : 'Connect Now',
                             ),
                           ),
-                          child: Text(
-                            alreadyConnected
-                                ? 'Connected'
-                                : requestSent
-                                ? 'Sent'
-                                : requestReceived
-                                ? 'Accept'
-                                : 'Connect Now',
-                          ),
-                        ),
                       ],
                     ),
                   ],
