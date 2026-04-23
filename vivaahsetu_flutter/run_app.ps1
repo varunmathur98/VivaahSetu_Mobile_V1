@@ -43,4 +43,4 @@ $deviceId = ($deviceLines[0] -split "\s+")[0]
 Write-Host "Launching on device $deviceId with PUB_CACHE=$localPubCache and BACKEND_URL=$env:BACKEND_URL" -ForegroundColor Green
 
 Set-Location $projectRoot
-& $flutterBin run -d $deviceId --fast-start --no-pub --target lib/main.dart --dart-define BACKEND_URL=$env:BACKEND_URL
+& $flutterBin run -d $deviceId --fast-start --no-pub --no-enable-impeller --target lib/main.dart --dart-define BACKEND_URL=$env:BACKEND_URL

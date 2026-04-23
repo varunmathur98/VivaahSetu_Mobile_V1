@@ -37,13 +37,13 @@ List<String> photoUrls(String baseUrl, Map<String, dynamic> data) {
   // Keep the backend-selected primary photo first so every screen uses the
   // same DP after the user changes it from mobile or web.
   for (final candidate in [
-    data['photoUrl'],
-    data['profilePhoto'],
     data['profile_photo'],
+    data['profilePhoto'],
     data['avatar'],
     data['image'],
     data['imageUrl'],
     data['image_url'],
+    data['photoUrl'],
   ]) {
     final preferred = resolveMediaUrl(baseUrl, candidate?.toString());
     if (preferred != null) urls.add(preferred);
@@ -64,12 +64,13 @@ Map<String, dynamic> normalizeUserPayload(Map<String, dynamic> raw) {
       .where((part) => part.isNotEmpty)
       .toList();
   final photos = asList(user['photos']);
-  final photoUrl = (user['photoUrl']?.toString().trim().isNotEmpty == true)
-      ? user['photoUrl'].toString().trim()
-      : (user['profile_photo']?.toString().trim().isNotEmpty == true)
+  final profilePhoto =
+      (user['profile_photo']?.toString().trim().isNotEmpty == true)
       ? user['profile_photo'].toString().trim()
       : (user['profilePhoto']?.toString().trim().isNotEmpty == true)
       ? user['profilePhoto'].toString().trim()
+      : (user['photoUrl']?.toString().trim().isNotEmpty == true)
+      ? user['photoUrl'].toString().trim()
       : (photos.isNotEmpty ? photos.first.toString() : '');
   user['id'] ??= user['_id']?.toString() ?? user['user_id']?.toString();
   user['dob'] ??= user['date_of_birth'];
@@ -82,7 +83,16 @@ Map<String, dynamic> normalizeUserPayload(Map<String, dynamic> raw) {
   user['familyDetails'] ??= user['family_details'];
   user['partnerPreferences'] ??= user['partner_preferences'];
   user['maritalStatus'] ??= user['marital_status'];
-  user['photoUrl'] ??= photoUrl;
+  if ((user['profile_photo']?.toString().trim() ?? '').isEmpty) {
+    user['profile_photo'] = profilePhoto;
+  }
+  if ((user['profilePhoto']?.toString().trim() ?? '').isEmpty) {
+    user['profilePhoto'] = profilePhoto;
+  }
+  if ((user['photoUrl']?.toString().trim() ?? '').isEmpty ||
+      profilePhoto.isNotEmpty) {
+    user['photoUrl'] = profilePhoto;
+  }
   final relStatus =
       (user['relationshipStatus'] ?? user['relationship_status'] ?? '')
           .toString()
@@ -107,7 +117,9 @@ Map<String, dynamic> normalizeUserPayload(Map<String, dynamic> raw) {
   user['motherTongue'] ??= user['mother_tongue'];
   user['subCaste'] ??= user['sub_caste'];
   user['subCaste'] ??= user['subcast'];
-  user['profilePhoto'] ??= user['profile_photo'];
+  if ((user['avatar']?.toString().trim() ?? '').isEmpty) {
+    user['avatar'] = profilePhoto;
+  }
   return user;
 }
 
@@ -205,6 +217,8 @@ Map<String, dynamic> normalizeMatchFilters(Map<String, dynamic> raw) {
     'height_max',
     'income_min',
     'income_max',
+    'diet',
+    'manglik',
   ]) {
     final value = input[key];
     if (value != null && value.toString().trim().isNotEmpty) {

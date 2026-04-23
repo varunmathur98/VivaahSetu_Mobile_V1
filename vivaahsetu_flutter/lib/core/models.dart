@@ -244,17 +244,24 @@ class PaymentStatus {
   final String message;
 
   factory PaymentStatus.fromMap(Map<String, dynamic> raw) {
+    String firstNonEmpty(List<dynamic> values) {
+      for (final value in values) {
+        final text = value?.toString().trim() ?? '';
+        if (text.isNotEmpty) return text;
+      }
+      return '';
+    }
+
     return PaymentStatus(
       orderId: (raw['orderId'] ?? raw['order_id'] ?? '').toString(),
       status: (raw['status'] ?? 'pending').toString(),
-      paymentLink:
-          (raw['paymentLink'] ??
-                  raw['payment_link'] ??
-                  raw['checkoutUrl'] ??
-                  raw['checkout_url'] ??
-                  raw['redirect_url'] ??
-                  '')
-              .toString(),
+      paymentLink: firstNonEmpty([
+        raw['paymentLink'],
+        raw['payment_link'],
+        raw['checkoutUrl'],
+        raw['checkout_url'],
+        raw['redirect_url'],
+      ]),
       message: (raw['message'] ?? '').toString(),
     );
   }

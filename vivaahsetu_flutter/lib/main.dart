@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:ui';
 
+import 'package:app_links/app_links.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -290,6 +293,40 @@ String? _resolveMediaUrl(String? raw) => adapter.resolveMediaUrl(_baseUrl, raw);
 List<String> _photoUrls(Map<String, dynamic> data) =>
     adapter.photoUrls(_baseUrl, data);
 
+bool _isPaidUser(Map<String, dynamic> user) {
+  final features = _asMap(user['features']);
+  final plan = (user['plan'] ?? user['subscriptionPlan'] ?? '')
+      .toString()
+      .toLowerCase();
+  return plan.isNotEmpty && plan != 'free' ||
+      features['chat_unlocked'] == true ||
+      features['view_contact_details'] == true ||
+      features['canViewExtraPhotos'] == true;
+}
+
+bool _canViewAllPhotosFor(
+  Map<String, dynamic> currentUser,
+  Map<String, dynamic> profile,
+) {
+  return _isPaidUser(currentUser) && _alreadyConnectedFlag(profile);
+}
+
+Map<String, dynamic> _galleryProfileFor(
+  Map<String, dynamic> currentUser,
+  Map<String, dynamic> profile, {
+  bool forceAll = false,
+}) {
+  final prepared = Map<String, dynamic>.from(profile);
+  final photos = _photoUrls(prepared);
+  final allowAll = forceAll || _canViewAllPhotosFor(currentUser, prepared);
+  prepared['photos'] = photos;
+  prepared['visiblePhotoCount'] = allowAll
+      ? photos.length
+      : (photos.isEmpty ? 0 : 1);
+  prepared['canViewAllPhotos'] = allowAll;
+  return prepared;
+}
+
 String _relationshipStatus(Map<String, dynamic> data) =>
     (data['relationshipStatus'] ?? data['relationship_status'] ?? '')
         .toString()
@@ -355,6 +392,18 @@ List<String> _preferenceList(TextEditingController controller) {
       .map((item) => item.trim())
       .where((item) => item.isNotEmpty && !_isAnyPreference(item))
       .toList();
+}
+
+int? _heightToInches(String? value) {
+  final text = (value ?? '').trim();
+  if (text.isEmpty) return null;
+  final match = RegExp(r"^(\d+)'(\d+)").firstMatch(text);
+  if (match != null) {
+    final feet = int.tryParse(match.group(1) ?? '');
+    final inches = int.tryParse(match.group(2) ?? '');
+    if (feet != null && inches != null) return feet * 12 + inches;
+  }
+  return int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), ''));
 }
 
 Uint8List? _decodeDataImage(String? value) {
@@ -431,9 +480,15 @@ Map<String, dynamic> _normalizeResponseMap(Map<String, dynamic> raw) =>
 
 final Future<FirebaseApp> _firebaseInitFuture = Firebase.initializeApp();
 
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  unawaited(_firebaseInitFuture);
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  await _firebaseInitFuture;
   await VSNotificationService.instance.initialize();
   runApp(const VivaahSetuApp());
 }
@@ -469,6 +524,45 @@ class VSNotificationService {
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.requestNotificationsPermission();
+    await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    FirebaseMessaging.onMessage.listen((message) {
+      final notification = message.notification;
+      final title =
+          notification?.title ?? message.data['title']?.toString() ?? '';
+      final body = notification?.body ?? message.data['body']?.toString() ?? '';
+      final payload =
+          message.data['payload']?.toString() ??
+          message.data['route']?.toString() ??
+          '';
+      if (title.isNotEmpty || body.isNotEmpty) {
+        unawaited(
+          show(
+            title: title.isEmpty ? 'VivaahSetu update' : title,
+            body: body.isEmpty ? 'You have a new update.' : body,
+            payload: payload,
+          ),
+        );
+      }
+    });
+    FirebaseMessaging.onMessageOpenedApp.listen((message) {
+      final payload =
+          message.data['payload']?.toString() ??
+          message.data['route']?.toString() ??
+          '';
+      if (payload.isNotEmpty) _tapController.add(payload);
+    });
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+    final initialPayload =
+        initialMessage?.data['payload']?.toString() ??
+        initialMessage?.data['route']?.toString() ??
+        '';
+    if (initialPayload.isNotEmpty) {
+      scheduleMicrotask(() => _tapController.add(initialPayload));
+    }
     final launchDetails = await _plugin.getNotificationAppLaunchDetails();
     final launchPayload =
         launchDetails?.notificationResponse?.payload?.trim() ?? '';
@@ -494,6 +588,7 @@ class VSNotificationService {
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
+      visibility: NotificationVisibility.public,
       category: AndroidNotificationCategory.social,
     );
     await _plugin.show(
@@ -592,8 +687,8 @@ class ApiClient {
     : _dio = Dio(
         BaseOptions(
           baseUrl: '${_baseUrl.replaceAll(RegExp(r'/+$'), '')}/api',
-          connectTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 30),
+          connectTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 12),
           headers: {'Content-Type': 'application/json'},
         ),
       );
@@ -611,18 +706,20 @@ class ApiClient {
     bool allowRetry = true,
   }) async {
     try {
-      final response = await _dio.request<dynamic>(
-        path,
-        data: data,
-        queryParameters: queryParameters,
-        options: Options(
-          method: method,
-          headers: {
-            if (token != null) 'Authorization': 'Bearer $token',
-            if (data is FormData) 'Content-Type': 'multipart/form-data',
-          },
-        ),
-      );
+      final response = await _dio
+          .request<dynamic>(
+            path,
+            data: data,
+            queryParameters: queryParameters,
+            options: Options(
+              method: method,
+              headers: {
+                if (token != null) 'Authorization': 'Bearer $token',
+                if (data is FormData) 'Content-Type': 'multipart/form-data',
+              },
+            ),
+          )
+          .timeout(const Duration(seconds: 15));
       return response.data;
     } on DioException catch (e) {
       if (e.response?.statusCode == 401 && token != null && token.isNotEmpty) {
@@ -890,6 +987,23 @@ class ApiClient {
     return <dynamic>[];
   }
 
+  Future<void> registerDeviceToken(String token, String deviceToken) async {
+    if (deviceToken.trim().isEmpty) return;
+    await _request(
+      'POST',
+      '/notifications/device-token',
+      token: token,
+      data: {
+        'token': deviceToken.trim(),
+        'platform': Platform.isAndroid ? 'android' : 'unknown',
+      },
+    );
+  }
+
+  Future<void> createNotificationDigest(String token) async {
+    await _request('POST', '/notifications/digest', token: token);
+  }
+
   Future<void> markNotificationsRead(String token) async {
     await _request('POST', '/notifications/read', token: token);
   }
@@ -1044,6 +1158,22 @@ class ApiClient {
     return <dynamic>[];
   }
 
+  Future<List<dynamic>> setPrimaryPhotoPath(String token, String path) async {
+    final response = await _request(
+      'POST',
+      '/profile/set-profile-photo',
+      token: token,
+      data: {'path': path},
+    );
+    if (response is Map) {
+      return _asList(response['photos'])
+          .map((item) => item?.toString().trim() ?? '')
+          .where((item) => item.isNotEmpty)
+          .toList();
+    }
+    return <dynamic>[];
+  }
+
   Future<Map<String, dynamic>> settings(String token) async {
     return Map<String, dynamic>.from(
       await _request('GET', '/settings', token: token) as Map,
@@ -1056,6 +1186,12 @@ class ApiClient {
   ) async {
     return Map<String, dynamic>.from(
       await _request('PUT', '/settings', token: token, data: data) as Map,
+    );
+  }
+
+  Future<Map<String, dynamic>> currentSubscription(String token) async {
+    return Map<String, dynamic>.from(
+      await _request('GET', '/subscriptions/current', token: token) as Map,
     );
   }
 
@@ -1075,6 +1211,29 @@ class ApiClient {
             item,
           ) {
             final plan = _asMap(item);
+            final planId = (plan['id'] ?? plan['plan_id'] ?? '')
+                .toString()
+                .trim()
+                .toLowerCase();
+            if (planId == 'focus') {
+              plan['price'] = 4990;
+              plan['discountedPrice'] = 2495;
+              plan['discounted_price'] = 2495;
+              plan['period'] = '3 months';
+              plan['display_price'] = 'INR 2,495';
+              plan['original_price'] = 4990;
+              plan['discount_percent'] = 50;
+              plan['promo_text'] = '50% off - pay INR 2,495 for 3 months';
+              plan['available'] = true;
+              plan['coming_soon'] = false;
+            } else if (planId == 'commit') {
+              plan['price'] = 0;
+              plan['discountedPrice'] = 0;
+              plan['discounted_price'] = 0;
+              plan['display_price'] = '/';
+              plan['available'] = false;
+              plan['coming_soon'] = true;
+            }
             plan['discountedPrice'] ??=
                 plan['discounted_price'] ?? plan['price'] ?? 0;
             plan['price'] ??=
@@ -1097,12 +1256,21 @@ class ApiClient {
       final data = Map<String, dynamic>.from(raw);
       data['orderId'] ??= data['order_id'] ?? data['id'] ?? '';
       data['paymentSessionId'] ??= data['payment_session_id'] ?? '';
-      data['paymentLink'] ??=
-          data['payment_link'] ??
-          data['checkout_url'] ??
-          data['redirect_url'] ??
-          '';
-      data['checkoutUrl'] ??= data['checkout_url'] ?? data['paymentLink'] ?? '';
+      final paymentLink =
+          [
+                data['paymentLink'],
+                data['payment_link'],
+                data['checkout_url'],
+                data['checkoutUrl'],
+                data['redirect_url'],
+              ]
+              .map((item) => item?.toString().trim() ?? '')
+              .firstWhere((item) => item.isNotEmpty, orElse: () => '');
+      data['paymentLink'] = paymentLink;
+      data['checkoutUrl'] =
+          [data['checkout_url'], data['checkoutUrl'], paymentLink]
+              .map((item) => item?.toString().trim() ?? '')
+              .firstWhere((item) => item.isNotEmpty, orElse: () => '');
       data['status'] ??= data['order_status'] ?? 'pending';
       return data;
     }
@@ -1117,8 +1285,8 @@ class ApiClient {
                 data: {
                   'planId': planId,
                   'plan_id': planId,
-                  'origin_url': 'https://vivaahsetu.in',
-                  'originUrl': 'https://vivaahsetu.in',
+                  'origin_url': 'vivaahsetu://payment-result',
+                  'originUrl': 'vivaahsetu://payment-result',
                 },
               )
               as Map,
@@ -1134,8 +1302,8 @@ class ApiClient {
                 data: {
                   'planId': planId,
                   'plan_id': planId,
-                  'origin_url': 'https://vivaahsetu.in',
-                  'originUrl': 'https://vivaahsetu.in',
+                  'origin_url': 'vivaahsetu://payment-result',
+                  'originUrl': 'vivaahsetu://payment-result',
                 },
               )
               as Map,
@@ -1183,10 +1351,113 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
+class VSStartupSplash extends StatelessWidget {
+  const VSStartupSplash({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFFFFF7EF), Color(0xFFFFE3E7), Color(0xFFFFD77A)],
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -80,
+              right: -90,
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: VSColors.primary.withValues(alpha: 0.16),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -110,
+              left: -90,
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: VSColors.secondary.withValues(alpha: 0.22),
+                ),
+              ),
+            ),
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 172,
+                    height: 172,
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.90),
+                      borderRadius: BorderRadius.circular(42),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x2A5F0924),
+                          blurRadius: 42,
+                          offset: Offset(0, 18),
+                        ),
+                      ],
+                    ),
+                    child: Image.asset(
+                      'assets/images/logo.png',
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
+                  const Text(
+                    'VivaahSetu',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w900,
+                      color: VSColors.primary,
+                      letterSpacing: -0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Curating meaningful matches',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: VSColors.textSecondary,
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                  const SizedBox(
+                    width: 34,
+                    height: 34,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 3,
+                      color: VSColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AppRootState extends State<AppRoot> {
   bool _loading = true;
   String? _token;
   Map<String, dynamic>? _user;
+  bool _termsAccepted = false;
   bool _logoutInProgress = false;
   late final ApiClient _api;
 
@@ -1312,6 +1583,9 @@ class _AppRootState extends State<AppRoot> {
     setState(() {
       _token = token;
       _user = cachedUser;
+      _termsAccepted =
+          prefs.getBool('terms_accepted') ??
+          (_asMap(cachedUser['settings'])['termsAccepted'] == true);
       _loading = false;
     });
     unawaited(_refreshUserSilently(token));
@@ -1326,11 +1600,33 @@ class _AppRootState extends State<AppRoot> {
     }
     await prefs.setString('auth_token', token);
     await prefs.setString('user_data', jsonEncode(user));
+    _termsAccepted =
+        prefs.getBool('terms_accepted') ??
+        (_asMap(user['settings'])['termsAccepted'] == true);
     if (!mounted) return;
     setState(() {
       _token = token;
       _user = user;
     });
+  }
+
+  Future<void> _acceptTerms() async {
+    final acceptedAt = DateTime.now().toUtc().toIso8601String();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('terms_accepted', true);
+    try {
+      if (_token != null) {
+        await _api.updateSettings(_token!, {
+          'termsAccepted': true,
+          'termsAcceptedAt': acceptedAt,
+          'privacyAcceptedAt': acceptedAt,
+        });
+      }
+    } catch (_) {
+      // Keep the user unblocked; consent is retained locally and resynced later.
+    }
+    if (!mounted) return;
+    setState(() => _termsAccepted = true);
   }
 
   Future<void> _saveUser(Map<String, dynamic> user) async {
@@ -1370,7 +1666,7 @@ class _AppRootState extends State<AppRoot> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const VSStartupSplash();
     }
     if (_token == null || _user == null) {
       return LoginPage(api: _api, onAuth: _saveAuth);
@@ -1384,12 +1680,114 @@ class _AppRootState extends State<AppRoot> {
         onProfileSaved: _saveUser,
       );
     }
+    if (!_termsAccepted) {
+      return TermsConsentPage(onAccept: _acceptTerms);
+    }
     return ShellPage(
       api: _api,
       token: _token!,
       user: _user!,
       onUserChanged: _saveUser,
       onLogout: _logout,
+    );
+  }
+}
+
+class TermsConsentPage extends StatefulWidget {
+  const TermsConsentPage({super.key, required this.onAccept});
+
+  final Future<void> Function() onAccept;
+
+  @override
+  State<TermsConsentPage> createState() => _TermsConsentPageState();
+}
+
+class _TermsConsentPageState extends State<TermsConsentPage> {
+  bool _accepted = false;
+  bool _saving = false;
+
+  Future<void> _continue() async {
+    if (!_accepted || _saving) return;
+    setState(() => _saving = true);
+    await widget.onAccept();
+    if (mounted) setState(() => _saving = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _postLoginBackground,
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.all(20),
+                children: [
+                  const Text(
+                    'VivaahSetu Consent',
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w800,
+                      color: _textColor,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Please review and accept the Terms, Privacy Policy, and Safety guidance before continuing.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: _textSecondaryColor,
+                      height: 1.45,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  _LegalTextBlock(
+                    title: 'Terms & Privacy',
+                    body: _termsPrivacyText,
+                  ),
+                  _LegalTextBlock(title: 'Safety', body: _securitySafetyText),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0x14000000),
+                    blurRadius: 18,
+                    offset: Offset(0, -6),
+                  ),
+                ],
+              ),
+              child: Column(
+                children: [
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _accepted,
+                    onChanged: (value) =>
+                        setState(() => _accepted = value ?? false),
+                    title: const Text(
+                      'I consent to VivaahSetu processing my data for matchmaking and communication services.',
+                      style: TextStyle(fontSize: 13, color: _textColor),
+                    ),
+                  ),
+                  FilledButton(
+                    onPressed: _accepted && !_saving ? _continue : null,
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(50),
+                      backgroundColor: VSColors.primary,
+                    ),
+                    child: Text(_saving ? 'Saving...' : 'Accept & Continue'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -1503,12 +1901,6 @@ class _LoginPageState extends State<LoginPage> {
                       color: _textColor,
                     ),
                   ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Continue securely with Google to find meaningful matches',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: _textSecondaryColor),
-                  ),
                   const SizedBox(height: 24),
                   FilledButton(
                     style: FilledButton.styleFrom(
@@ -1558,31 +1950,6 @@ class _LoginPageState extends State<LoginPage> {
                               ),
                             ],
                           ),
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: VSColors.roseMist,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: VSColors.border),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.lock_outline, color: VSColors.primary),
-                        SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Google sign-in keeps your profile secure and synced across VivaahSetu web and mobile.',
-                            style: TextStyle(
-                              color: _textSecondaryColor,
-                              fontSize: 12,
-                              height: 1.35,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
                   const SizedBox(height: 22),
                   const Text(
@@ -1648,9 +2015,11 @@ class _ShellPageState extends State<ShellPage> {
   int _index = 0;
   int _chatUnreadCount = 0;
   int _realtimeRevision = 0;
+  late Map<String, dynamic> _currentUser;
   Timer? _unreadPollTimer;
   Timer? _reconnectTimer;
   StreamSubscription<String>? _notificationTapSub;
+  StreamSubscription<Uri>? _deepLinkSub;
   WebSocket? _realtimeSocket;
   bool _shouldReconnect = true;
   String? _pendingChatPartnerId;
@@ -1658,16 +2027,38 @@ class _ShellPageState extends State<ShellPage> {
   @override
   void initState() {
     super.initState();
+    _currentUser = _normalizeUserPayload(widget.user);
     unawaited(_refreshUnreadCount());
     _unreadPollTimer = Timer.periodic(
-      const Duration(seconds: 8),
+      const Duration(seconds: 1),
       (_) => unawaited(_refreshUnreadCount()),
     );
     _notificationTapSub = VSNotificationService.instance.taps.listen(
       _handleNotificationPayload,
     );
+    unawaited(_listenForPaymentLinks());
     unawaited(_connectRealtimeSocket());
+    unawaited(_registerPushToken());
     unawaited(_showDailyRecommendationIfNeeded());
+  }
+
+  @override
+  void didUpdateWidget(covariant ShellPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextUser = _normalizeUserPayload(widget.user);
+    if (jsonEncode(nextUser) != jsonEncode(_currentUser)) {
+      _currentUser = nextUser;
+    }
+  }
+
+  Future<void> _syncUser(Map<String, dynamic> user) async {
+    final normalized = _normalizeUserPayload(user);
+    if (mounted) {
+      setState(() {
+        _currentUser = normalized;
+      });
+    }
+    await widget.onUserChanged(normalized);
   }
 
   @override
@@ -1676,8 +2067,73 @@ class _ShellPageState extends State<ShellPage> {
     _unreadPollTimer?.cancel();
     _reconnectTimer?.cancel();
     _notificationTapSub?.cancel();
+    _deepLinkSub?.cancel();
     _realtimeSocket?.close(WebSocketStatus.normalClosure);
     super.dispose();
+  }
+
+  Future<void> _listenForPaymentLinks() async {
+    try {
+      final appLinks = AppLinks();
+      final initial = await appLinks.getInitialLink();
+      if (initial != null) {
+        unawaited(_handleDeepLink(initial));
+      }
+      _deepLinkSub = appLinks.uriLinkStream.listen((uri) {
+        unawaited(_handleDeepLink(uri));
+      });
+    } catch (_) {
+      // Payment verification can still run through the subscription page fallback.
+    }
+  }
+
+  Future<void> _handleDeepLink(Uri uri) async {
+    if (uri.scheme != 'vivaahsetu' || uri.host != 'payment-result') return;
+    final orderId =
+        uri.queryParameters['order_id'] ??
+        uri.queryParameters['orderId'] ??
+        uri.queryParameters['order'];
+    if (orderId == null || orderId.trim().isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Returned from payment checkout.')),
+      );
+      return;
+    }
+    try {
+      final result = await widget.api.verifyOrder(widget.token, orderId.trim());
+      final status = (result['status'] ?? result['payment_status'] ?? '')
+          .toString()
+          .toLowerCase();
+      if (!mounted) return;
+      if (status == 'success' || status == 'paid' || status == 'complete') {
+        final fresh = await widget.api.me(widget.token);
+        if (!mounted) return;
+        await _syncUser(
+          _asMap(fresh['user']).isNotEmpty ? _asMap(fresh['user']) : fresh,
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Payment successful. Focus plan active.'),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              status == 'failed' || status == 'cancelled'
+                  ? 'Payment $status. Your plan was not changed.'
+                  : 'Payment is pending. We will update your plan after confirmation.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
   }
 
   void _handleNotificationPayload(String payload) {
@@ -1688,27 +2144,45 @@ class _ShellPageState extends State<ShellPage> {
         _pendingChatPartnerId = partnerId.isEmpty ? null : partnerId;
         _index = 2;
         _chatUnreadCount = 0;
-        _realtimeRevision++;
       });
       return;
     }
     if (payload == 'connections') {
       setState(() {
         _index = 1;
-        _realtimeRevision++;
       });
+      return;
+    }
+    if (payload.startsWith('profile:')) {
+      final profileId = payload.substring('profile:'.length).trim();
+      setState(() {
+        _index = 0;
+      });
+      if (profileId.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => MatchProfilePage(
+                api: widget.api,
+                token: widget.token,
+                user: _currentUser,
+                profileId: profileId,
+              ),
+            ),
+          );
+        });
+      }
       return;
     }
     if (payload == 'matches' || payload == 'notifications') {
       setState(() {
         _index = 0;
-        _realtimeRevision++;
       });
       return;
     }
     setState(() {
       _index = 0;
-      _realtimeRevision++;
     });
   }
 
@@ -1723,6 +2197,7 @@ class _ShellPageState extends State<ShellPage> {
       await prefs.setString('daily_recommendation_notified_on', today);
       await Future<void>.delayed(const Duration(seconds: 3));
       if (!mounted) return;
+      unawaited(widget.api.createNotificationDigest(widget.token));
       await _showLocalNotification(
         title: 'Daily VivaahSetu recommendations',
         body: 'New compatible profiles are ready for you today.',
@@ -1730,6 +2205,21 @@ class _ShellPageState extends State<ShellPage> {
       );
     } catch (_) {
       // Recommendation notifications should never block app startup.
+    }
+  }
+
+  Future<void> _registerPushToken() async {
+    try {
+      await _firebaseInitFuture;
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null && token.trim().isNotEmpty) {
+        await widget.api.registerDeviceToken(widget.token, token);
+      }
+      FirebaseMessaging.instance.onTokenRefresh.listen((newToken) {
+        unawaited(widget.api.registerDeviceToken(widget.token, newToken));
+      });
+    } catch (_) {
+      // Local/realtime notifications still work if FCM is not available.
     }
   }
 
@@ -1790,7 +2280,7 @@ class _ShellPageState extends State<ShellPage> {
     }
     if (type == 'new_message') {
       final message = _asMap(data['message']);
-      final myId = widget.user['id']?.toString() ?? '';
+      final myId = _currentUser['id']?.toString() ?? '';
       final senderId = (message['sender_id'] ?? message['senderId'] ?? '')
           .toString();
       final content = message['content']?.toString().trim() ?? '';
@@ -1814,6 +2304,8 @@ class _ShellPageState extends State<ShellPage> {
       final payload =
           notificationType.contains('chat') || lowered.contains('message')
           ? 'chat:${notification['sender_id'] ?? notification['senderId'] ?? ''}'
+          : notificationType.contains('visitor')
+          ? 'profile:${notification['from_user_id'] ?? notification['fromUserId'] ?? ''}'
           : notificationType.contains('connection') ||
                 lowered.contains('request') ||
                 lowered.contains('accepted') ||
@@ -1836,10 +2328,10 @@ class _ShellPageState extends State<ShellPage> {
         type == 'new_message') {
       unawaited(_refreshUnreadCount());
       if (type == 'profile_updated' && data['profile'] is Map) {
-        unawaited(widget.onUserChanged(_asMap(data['profile'])));
+        unawaited(_syncUser(_asMap(data['profile'])));
       }
       if (mounted) {
-        setState(() => _realtimeRevision++);
+        setState(() {});
       }
     }
   }
@@ -1861,7 +2353,6 @@ class _ShellPageState extends State<ShellPage> {
       if (index == 2) {
         _chatUnreadCount = 0;
       }
-      _realtimeRevision++;
     });
   }
 
@@ -1869,24 +2360,25 @@ class _ShellPageState extends State<ShellPage> {
   Widget build(BuildContext context) {
     final pages = [
       HomeTab(
-        key: ValueKey('home-$_realtimeRevision'),
+        key: const ValueKey('home'),
         api: widget.api,
         token: widget.token,
-        user: widget.user,
+        user: _currentUser,
         onNavigate: _goToTab,
         onNotificationPayload: _handleNotificationPayload,
+        onUserChanged: _syncUser,
       ),
       ConnectionsTab(
-        key: ValueKey('connections-$_realtimeRevision'),
+        key: const ValueKey('connections'),
         api: widget.api,
         token: widget.token,
-        user: widget.user,
+        user: _currentUser,
       ),
       MessagesTab(
-        key: ValueKey('messages-$_realtimeRevision'),
+        key: const ValueKey('messages'),
         api: widget.api,
         token: widget.token,
-        user: widget.user,
+        user: _currentUser,
         initialPartnerId: _pendingChatPartnerId,
         onInitialPartnerConsumed: () {
           if (!mounted) return;
@@ -1894,11 +2386,11 @@ class _ShellPageState extends State<ShellPage> {
         },
       ),
       ProfileTab(
-        key: ValueKey('profile-$_realtimeRevision'),
+        key: const ValueKey('profile'),
         api: widget.api,
         token: widget.token,
-        user: widget.user,
-        onUserChanged: widget.onUserChanged,
+        user: _currentUser,
+        onUserChanged: _syncUser,
         onLogout: widget.onLogout,
       ),
     ];
@@ -1964,6 +2456,7 @@ class HomeTab extends StatefulWidget {
     required this.user,
     required this.onNavigate,
     required this.onNotificationPayload,
+    required this.onUserChanged,
   });
 
   final ApiClient api;
@@ -1971,6 +2464,7 @@ class HomeTab extends StatefulWidget {
   final Map<String, dynamic> user;
   final void Function(int index) onNavigate;
   final void Function(String payload) onNotificationPayload;
+  final Future<void> Function(Map<String, dynamic>) onUserChanged;
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -1988,8 +2482,32 @@ class _HomeTabState extends State<HomeTab> {
   @override
   void initState() {
     super.initState();
-    _load();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (_) => _load());
+    _profile = _normalizeUserPayload(widget.user);
+    _connections = {
+      'connections': List<dynamic>.from(
+        widget.user['connections'] as List? ?? const <dynamic>[],
+      ),
+      'pendingReceived': List<dynamic>.from(
+        widget.user['connectionRequestsReceived'] as List? ??
+            widget.user['connection_requests_received'] as List? ??
+            const <dynamic>[],
+      ),
+      'pendingSent': List<dynamic>.from(
+        widget.user['connectionRequestsSent'] as List? ??
+            widget.user['connection_requests_sent'] as List? ??
+            const <dynamic>[],
+      ),
+      'count': List<dynamic>.from(
+        widget.user['connections'] as List? ?? const <dynamic>[],
+      ).length,
+      'max': 5,
+    };
+    _loading = false;
+    _load(silent: true);
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _load(silent: true),
+    );
   }
 
   @override
@@ -2012,12 +2530,14 @@ class _HomeTabState extends State<HomeTab> {
           onProfileSaved: (user) async {
             if (!mounted) return;
             setState(() => _profile = user);
+            await widget.onUserChanged(user);
           },
         ),
       ),
     );
     if (updated != null && mounted) {
       setState(() => _profile = updated);
+      await widget.onUserChanged(updated);
       await _load();
     }
   }
@@ -2036,10 +2556,10 @@ class _HomeTabState extends State<HomeTab> {
     );
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool silent = false}) async {
     final firstPaintLoad =
         _profile == null && _connections == null && _previewMatches.isEmpty;
-    if (firstPaintLoad) {
+    if (!silent && firstPaintLoad) {
       setState(() => _loading = true);
     }
 
@@ -2073,7 +2593,7 @@ class _HomeTabState extends State<HomeTab> {
       if (unread != null) {
         _unreadChats = (unread as num?)?.toInt() ?? _unreadChats;
       }
-      _loading = false;
+      if (!silent || firstPaintLoad) _loading = false;
     });
 
     final details = await Future.wait([
@@ -2096,10 +2616,13 @@ class _HomeTabState extends State<HomeTab> {
       if (profileResult != null) {
         _profile = _asMap(profileResult);
       }
+      if (!silent || firstPaintLoad) _loading = false;
       _unreadNotifications = unreadNotifications;
-      _previewMatches = List<dynamic>.from(
-        previewPayload['matches'] as List? ?? <dynamic>[],
-      );
+      if (previewPayload.containsKey('matches')) {
+        _previewMatches = List<dynamic>.from(
+          previewPayload['matches'] as List? ?? <dynamic>[],
+        );
+      }
     });
 
     final latestProfile = _profile;
@@ -2130,27 +2653,38 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   int _progress(Map<String, dynamic> p) {
-    const fields = [
-      'name',
-      'age',
-      'gender',
-      'height',
-      'religion',
-      'city',
-      'education',
-      'occupation',
-      'about',
+    const fieldGroups = [
+      ['name'],
+      ['age'],
+      ['gender'],
+      ['height'],
+      ['religion'],
+      ['city', 'location'],
+      ['education'],
+      ['occupation', 'profession'],
+      ['about'],
+      ['phone'],
+      ['motherTongue', 'mother_tongue'],
+      ['maritalStatus', 'marital_status'],
+      ['income'],
+      ['diet'],
+      ['manglik'],
+      ['hobbies'],
+      ['familyDetails', 'family_details'],
+      ['familyFinancialStatus', 'family_financial_status'],
     ];
-    final filled = fields
-        .where((f) => p[f] != null && p[f].toString().trim().isNotEmpty)
-        .length;
-    final hasPhoto = (p['photos'] as List? ?? []).isNotEmpty ? 1 : 0;
-    return (((filled + hasPhoto) / (fields.length + 1)) * 100).round();
+    bool hasAny(List<String> keys) => keys.any(
+      (key) => p[key] != null && p[key].toString().trim().isNotEmpty,
+    );
+    final filled = fieldGroups.where(hasAny).length;
+    final hasPhoto = _photoUrls(p).isNotEmpty ? 1 : 0;
+    return (((filled + hasPhoto) / (fieldGroups.length + 1)) * 100).round();
   }
 
   @override
   Widget build(BuildContext context) {
-    final name = widget.user['name']?.toString().split(' ').first ?? 'User';
+    final profileForUi = _profile ?? widget.user;
+    final name = profileForUi['name']?.toString().split(' ').first ?? 'User';
     final planRaw =
         _profile?['plan']?.toString() ??
         widget.user['plan']?.toString() ??
@@ -2166,7 +2700,7 @@ class _HomeTabState extends State<HomeTab> {
     final sentCount = List<dynamic>.from(
       _connections?['pendingSent'] as List? ?? const <dynamic>[],
     ).length;
-    final progress = _profile == null ? 0 : _progress(_profile!);
+    final progress = _progress(profileForUi);
     final totalInbox = _unreadChats + _unreadNotifications;
     final now = DateTime.now();
     const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -2334,7 +2868,7 @@ class _HomeTabState extends State<HomeTab> {
                           Row(
                             children: [
                               _CircularProfileAvatar(
-                                profile: _profile ?? widget.user,
+                                profile: profileForUi,
                                 size: 70,
                                 borderColor: Colors.white24,
                               ),
@@ -2565,12 +3099,7 @@ class _HomeTabState extends State<HomeTab> {
                 style: TextStyle(fontSize: 13, color: _textSecondaryColor),
               ),
               const SizedBox(height: 10),
-              if (_loading && _previewMatches.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 18),
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else if (_previewMatches.isEmpty)
+              if (_previewMatches.isEmpty)
                 const VSCard(
                   child: Padding(
                     padding: EdgeInsets.symmetric(vertical: 12),
@@ -2587,8 +3116,12 @@ class _HomeTabState extends State<HomeTab> {
                 Column(
                   children: _previewMatches.take(4).map((raw) {
                     final p = _asMap(raw);
+                    final galleryProfile = _galleryProfileFor(
+                      _profile ?? widget.user,
+                      p,
+                    );
                     return _HomeProfilePreviewCard(
-                      profile: p,
+                      profile: galleryProfile,
                       onTap: () {
                         Navigator.of(context).push(
                           MaterialPageRoute<void>(
@@ -2601,6 +3134,45 @@ class _HomeTabState extends State<HomeTab> {
                             ),
                           ),
                         );
+                      },
+                      onAccept: () async {
+                        final id = p['id']?.toString() ?? '';
+                        if (id.isEmpty) return;
+                        try {
+                          final response = await widget.api.acceptRequest(
+                            widget.token,
+                            id,
+                          );
+                          if (!mounted) return;
+                          setState(() {
+                            _previewMatches = _previewMatches.map((item) {
+                              final map = _asMap(item);
+                              if (map['id']?.toString() == id) {
+                                _applyRelationshipStatus(
+                                  map,
+                                  response['relationshipStatus']?.toString() ??
+                                      'CONNECTED',
+                                );
+                              }
+                              return map;
+                            }).toList();
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Connection accepted'),
+                            ),
+                          );
+                          await _load();
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                e.toString().replaceFirst('Exception: ', ''),
+                              ),
+                            ),
+                          );
+                        }
                       },
                       onConnect: () async {
                         final id = p['id']?.toString() ?? '';
@@ -2755,18 +3327,35 @@ class _BrowseTabState extends State<BrowseTab> {
   final _religion = TextEditingController();
   final _caste = TextEditingController();
   final _profession = TextEditingController();
+  final _education = TextEditingController();
+  final _maritalStatus = TextEditingController();
+  final _motherTongue = TextEditingController();
   String? _selectedCity;
   String? _selectedReligion;
   String? _selectedCaste;
   String? _selectedProfession;
+  String? _selectedEducation;
+  String? _selectedMaritalStatus;
+  String? _selectedMotherTongue;
+  String? _selectedHeightMin;
+  String? _selectedHeightMax;
+  String? _selectedIncome;
+  String? _selectedDiet;
+  String? _selectedManglik;
   List<String> _availableCastes = const <String>[];
   List<dynamic> _matches = <dynamic>[];
+  String _browseMode = 'matches';
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _seedFiltersFromPreferences();
     unawaited(_load());
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _load(silent: true),
+    );
   }
 
   @override
@@ -2777,6 +3366,10 @@ class _BrowseTabState extends State<BrowseTab> {
     _religion.dispose();
     _caste.dispose();
     _profession.dispose();
+    _education.dispose();
+    _maritalStatus.dispose();
+    _motherTongue.dispose();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
@@ -2864,8 +3457,10 @@ class _BrowseTabState extends State<BrowseTab> {
     });
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  Future<void> _load({bool silent = false}) async {
+    if (!silent || _matches.isEmpty) {
+      setState(() => _loading = true);
+    }
     try {
       final filters = <String, dynamic>{'page': 1, 'limit': 20};
       if (_minAge.text.trim().isNotEmpty)
@@ -2880,15 +3475,40 @@ class _BrowseTabState extends State<BrowseTab> {
         filters['caste'] = _selectedCaste!.trim();
       if (_selectedProfession?.trim().isNotEmpty == true)
         filters['profession'] = _selectedProfession!.trim();
+      if (_selectedEducation?.trim().isNotEmpty == true)
+        filters['education'] = _selectedEducation!.trim();
+      if (_selectedMaritalStatus?.trim().isNotEmpty == true)
+        filters['marital_status'] = _selectedMaritalStatus!.trim();
+      if (_selectedMotherTongue?.trim().isNotEmpty == true)
+        filters['mother_tongue'] = _selectedMotherTongue!.trim();
+      if (_selectedHeightMin?.trim().isNotEmpty == true)
+        filters['height_min'] = _heightToInches(_selectedHeightMin);
+      if (_selectedHeightMax?.trim().isNotEmpty == true)
+        filters['height_max'] = _heightToInches(_selectedHeightMax);
+      if (_selectedIncome?.trim().isNotEmpty == true)
+        filters['income_min'] = int.tryParse(
+          _selectedIncome!.replaceAll(RegExp(r'[^0-9]'), ''),
+        );
+      if (_selectedDiet?.trim().isNotEmpty == true)
+        filters['diet'] = _selectedDiet!.trim();
+      if (_selectedManglik?.trim().isNotEmpty == true)
+        filters['manglik'] = _selectedManglik!.trim();
       final data = await widget.api.matches(widget.token, filters);
+      var matches = List<dynamic>.from(data['matches'] as List? ?? <dynamic>[]);
+      if (_browseMode == 'new') {
+        final cutoff = DateTime.now().subtract(const Duration(days: 30));
+        matches = matches.where((item) {
+          final map = _asMap(item);
+          final created = DateTime.tryParse(
+            (map['created_at'] ?? map['createdAt'] ?? '').toString(),
+          );
+          return created == null || created.isAfter(cutoff);
+        }).toList();
+      }
       if (!mounted) return;
-      setState(
-        () => _matches = List<dynamic>.from(
-          data['matches'] as List? ?? <dynamic>[],
-        ),
-      );
+      setState(() => _matches = matches);
     } catch (e) {
-      _toast(e);
+      if (!silent) _toast(e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -2912,6 +3532,30 @@ class _BrowseTabState extends State<BrowseTab> {
         });
       }
       _toast('Connection request sent');
+      await _load();
+    } catch (e) {
+      _toast(e);
+    }
+  }
+
+  Future<void> _accept(String id) async {
+    try {
+      final response = await widget.api.acceptRequest(widget.token, id);
+      if (mounted) {
+        setState(() {
+          _matches = _matches.map((item) {
+            final map = _asMap(item);
+            if (map['id']?.toString() == id) {
+              _applyRelationshipStatus(
+                map,
+                response['relationshipStatus']?.toString() ?? 'CONNECTED',
+              );
+            }
+            return map;
+          }).toList();
+        });
+      }
+      _toast('Connection accepted');
       await _load();
     } catch (e) {
       _toast(e);
@@ -3004,31 +3648,50 @@ class _BrowseTabState extends State<BrowseTab> {
               ),
             ),
             SizedBox(
-              height: 58,
+              height: 64,
               child: ListView(
                 scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
                 children: [
                   _BrowseSectionChip(
                     icon: Icons.tune_rounded,
                     label: 'Search',
                     value: 'Refine preferences',
-                    selected: _showFilters,
-                    onTap: () => setState(() => _showFilters = true),
+                    selected: _showFilters || _browseMode == 'search',
+                    onTap: () {
+                      setState(() {
+                        _browseMode = 'search';
+                        _showFilters = true;
+                      });
+                    },
                   ),
                   const SizedBox(width: 10),
                   _BrowseSectionChip(
                     icon: Icons.fiber_new_rounded,
                     label: 'New',
                     value: '${_matches.length} added',
-                    onTap: _load,
+                    selected: _browseMode == 'new',
+                    onTap: () {
+                      setState(() {
+                        _browseMode = 'new';
+                        _showFilters = false;
+                      });
+                      _load();
+                    },
                   ),
                   const SizedBox(width: 10),
                   _BrowseSectionChip(
                     icon: Icons.favorite_rounded,
                     label: 'My Matches',
                     value: '${_matches.length} profiles',
-                    onTap: _load,
+                    selected: _browseMode == 'matches',
+                    onTap: () {
+                      setState(() {
+                        _browseMode = 'matches';
+                        _showFilters = false;
+                      });
+                      _load();
+                    },
                   ),
                 ],
               ),
@@ -3154,6 +3817,146 @@ class _BrowseTabState extends State<BrowseTab> {
                     Row(
                       children: [
                         Expanded(
+                          child: _DropdownField(
+                            label: 'Education',
+                            value: _selectedEducation,
+                            options: _mergeDropdownOptions(
+                              _educationOptions,
+                              _selectedEducation,
+                            ),
+                            hint: 'Education',
+                            onChanged: (value) {
+                              setState(() {
+                                _selectedEducation = value;
+                                _education.text = value ?? '';
+                              });
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Marital Status',
+                            value: _selectedMaritalStatus,
+                            options: _mergeDropdownOptions(
+                              _maritalStatusOptions,
+                              _selectedMaritalStatus,
+                            ),
+                            hint: 'Marital status',
+                            onChanged: (value) {
+                              setState(() {
+                                _selectedMaritalStatus = value;
+                                _maritalStatus.text = value ?? '';
+                              });
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Mother Tongue',
+                            value: _selectedMotherTongue,
+                            options: _mergeDropdownOptions(
+                              _motherTongueOptions,
+                              _selectedMotherTongue,
+                            ),
+                            hint: 'Mother tongue',
+                            onChanged: (value) {
+                              setState(() {
+                                _selectedMotherTongue = value;
+                                _motherTongue.text = value ?? '';
+                              });
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Income',
+                            value: _selectedIncome,
+                            options: _mergeDropdownOptions(
+                              _incomeOptions,
+                              _selectedIncome,
+                            ),
+                            hint: 'Income',
+                            onChanged: (value) =>
+                                setState(() => _selectedIncome = value),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Min Height',
+                            value: _selectedHeightMin,
+                            options: _mergeDropdownOptions(
+                              _heightOptions,
+                              _selectedHeightMin,
+                            ),
+                            hint: 'Min height',
+                            onChanged: (value) =>
+                                setState(() => _selectedHeightMin = value),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Max Height',
+                            value: _selectedHeightMax,
+                            options: _mergeDropdownOptions(
+                              _heightOptions,
+                              _selectedHeightMax,
+                            ),
+                            hint: 'Max height',
+                            onChanged: (value) =>
+                                setState(() => _selectedHeightMax = value),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Diet',
+                            value: _selectedDiet,
+                            options: _mergeDropdownOptions(
+                              _dietOptions,
+                              _selectedDiet,
+                            ),
+                            hint: 'Diet',
+                            onChanged: (value) =>
+                                setState(() => _selectedDiet = value),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: _DropdownField(
+                            label: 'Manglik',
+                            value: _selectedManglik,
+                            options: _mergeDropdownOptions(
+                              _manglikOptions,
+                              _selectedManglik,
+                            ),
+                            hint: 'Manglik',
+                            onChanged: (value) =>
+                                setState(() => _selectedManglik = value),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
                           child: FilledButton(
                             onPressed: _loading ? null : _load,
                             style: FilledButton.styleFrom(
@@ -3176,12 +3979,24 @@ class _BrowseTabState extends State<BrowseTab> {
                               _religion.clear();
                               _caste.clear();
                               _profession.clear();
+                              _education.clear();
+                              _maritalStatus.clear();
+                              _motherTongue.clear();
                               setState(() {
                                 _selectedCity = null;
                                 _selectedReligion = null;
                                 _selectedCaste = null;
                                 _selectedProfession = null;
+                                _selectedEducation = null;
+                                _selectedMaritalStatus = null;
+                                _selectedMotherTongue = null;
+                                _selectedHeightMin = null;
+                                _selectedHeightMax = null;
+                                _selectedIncome = null;
+                                _selectedDiet = null;
+                                _selectedManglik = null;
                                 _availableCastes = const <String>[];
+                                _browseMode = 'matches';
                               });
                               _load();
                               setState(() => _showFilters = false);
@@ -3210,7 +4025,7 @@ class _BrowseTabState extends State<BrowseTab> {
             Padding(
               padding: const EdgeInsets.all(16),
               child: _loading && _matches.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const VSSkeletonLoader(count: 5)
                   : _matches.isEmpty
                   ? const Padding(
                       padding: EdgeInsets.symmetric(vertical: 120),
@@ -3236,6 +4051,10 @@ class _BrowseTabState extends State<BrowseTab> {
                   : Column(
                       children: _matches.map((item) {
                         final p = Map<String, dynamic>.from(item as Map);
+                        final galleryProfile = _galleryProfileFor(
+                          widget.user,
+                          p,
+                        );
                         return GestureDetector(
                           onTap: () {
                             Navigator.of(context).push(
@@ -3274,7 +4093,7 @@ class _BrowseTabState extends State<BrowseTab> {
                                         ),
                                       ),
                                       child: _PhotoCarousel(
-                                        profile: p,
+                                        profile: galleryProfile,
                                         height: 260,
                                         radius: const BorderRadius.vertical(
                                           top: Radius.circular(16),
@@ -3282,6 +4101,7 @@ class _BrowseTabState extends State<BrowseTab> {
                                       ),
                                     ),
                                     if (p['requestSent'] == true ||
+                                        p['requestReceived'] == true ||
                                         p['alreadyConnected'] == true)
                                       Positioned(
                                         top: 16,
@@ -3302,6 +4122,8 @@ class _BrowseTabState extends State<BrowseTab> {
                                           child: Text(
                                             p['alreadyConnected'] == true
                                                 ? 'Connected'
+                                                : p['requestReceived'] == true
+                                                ? 'Accept Request'
                                                 : 'Request Sent',
                                             style: const TextStyle(
                                               fontSize: 12,
@@ -3368,16 +4190,20 @@ class _BrowseTabState extends State<BrowseTab> {
                                           text: p['religion'].toString(),
                                         ),
                                       if (p['requestSent'] != true &&
-                                          p['alreadyConnected'] != true &&
-                                          p['requestReceived'] != true)
+                                          p['alreadyConnected'] != true)
                                         Padding(
                                           padding: const EdgeInsets.only(
                                             top: 16,
                                           ),
                                           child: FilledButton.icon(
-                                            onPressed: () => _connect(
-                                              p['id']?.toString() ?? '',
-                                            ),
+                                            onPressed: () =>
+                                                p['requestReceived'] == true
+                                                ? _accept(
+                                                    p['id']?.toString() ?? '',
+                                                  )
+                                                : _connect(
+                                                    p['id']?.toString() ?? '',
+                                                  ),
                                             style: FilledButton.styleFrom(
                                               backgroundColor: const Color(
                                                 0xFF8B0000,
@@ -3393,7 +4219,11 @@ class _BrowseTabState extends State<BrowseTab> {
                                               Icons.favorite,
                                               size: 18,
                                             ),
-                                            label: const Text('Connect'),
+                                            label: Text(
+                                              p['requestReceived'] == true
+                                                  ? 'Accept Request'
+                                                  : 'Connect',
+                                            ),
                                           ),
                                         ),
                                     ],
@@ -3440,8 +4270,30 @@ class _ConnectionsTabState extends State<ConnectionsTab>
   void initState() {
     super.initState();
     _tabs = TabController(length: 3, vsync: this);
-    _load();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 12), (_) => _load());
+    final cachedConnections = List<dynamic>.from(
+      widget.user['connections'] as List? ?? const <dynamic>[],
+    );
+    _data = {
+      'connections': const <dynamic>[],
+      'pendingReceived': List<dynamic>.from(
+        widget.user['connectionRequestsReceived'] as List? ??
+            widget.user['connection_requests_received'] as List? ??
+            const <dynamic>[],
+      ),
+      'pendingSent': List<dynamic>.from(
+        widget.user['connectionRequestsSent'] as List? ??
+            widget.user['connection_requests_sent'] as List? ??
+            const <dynamic>[],
+      ),
+      'count': cachedConnections.length,
+      'max': 5,
+    };
+    _loading = false;
+    _load(silent: true);
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _load(silent: true),
+    );
   }
 
   @override
@@ -3451,14 +4303,21 @@ class _ConnectionsTabState extends State<ConnectionsTab>
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() => _loading = true);
+  Future<void> _load({bool silent = false}) async {
+    if (!silent || _data.isEmpty) {
+      setState(() => _loading = true);
+    }
     try {
-      final data = await widget.api.connections(widget.token);
+      final data = await widget.api
+          .connections(widget.token)
+          .timeout(const Duration(seconds: 8));
       if (!mounted) return;
-      setState(() => _data = data);
+      setState(() {
+        _data = data;
+        _loading = false;
+      });
     } catch (e) {
-      _toast(e);
+      if (!silent) _toast(e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -3469,6 +4328,55 @@ class _ConnectionsTabState extends State<ConnectionsTab>
       await action();
       _toast(message);
       await _load();
+    } catch (e) {
+      _toast(e);
+    }
+  }
+
+  Future<void> _runExtension(
+    String connectionId,
+    Future<Map<String, dynamic>> Function() action,
+    String message, {
+    required bool approving,
+  }) async {
+    try {
+      final response = await action();
+      if (mounted && approving) {
+        final newExpiry = (response['expires_at'] ?? response['new_expires_at'])
+            ?.toString();
+        setState(() {
+          final next = Map<String, dynamic>.from(_data);
+          final active = List<dynamic>.from(
+            next['connections'] as List? ?? const <dynamic>[],
+          );
+          next['connections'] = active.map((raw) {
+            final item = _asMap(raw);
+            final id = (item['connection_id'] ?? item['connectionId'] ?? '')
+                .toString();
+            if (id != connectionId) return raw;
+            final currentExpiry =
+                DateTime.tryParse(
+                  (item['expiresAt'] ?? item['expires_at'] ?? '').toString(),
+                ) ??
+                DateTime.now();
+            final expiry =
+                DateTime.tryParse(newExpiry ?? '') ??
+                currentExpiry.add(const Duration(days: 15));
+            item['expiresAt'] = expiry.toIso8601String();
+            item['expires_at'] = expiry.toIso8601String();
+            item['extension_request'] = {
+              'status': 'approved',
+              'approved_at': DateTime.now().toUtc().toIso8601String(),
+            };
+            item['extensions'] =
+                ((item['extensions'] as num?)?.toInt() ?? 0) + 1;
+            return item;
+          }).toList();
+          _data = next;
+        });
+      }
+      _toast(message);
+      await _load(silent: true);
     } catch (e) {
       _toast(e);
     }
@@ -3563,7 +4471,11 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                     emptyLabel: 'No active connections',
                     builder: (item) {
                       final p = Map<String, dynamic>.from(item as Map);
-                      final expiresAt = p['expiresAt']?.toString();
+                      if (_relationshipStatus(p).isEmpty) {
+                        _applyRelationshipStatus(p, 'CONNECTED');
+                      }
+                      final expiresAt = (p['expiresAt'] ?? p['expires_at'])
+                          ?.toString();
                       final daysLeft = expiresAt == null
                           ? null
                           : DateTime.tryParse(
@@ -3575,10 +4487,14 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                       final extensionRequest = _asMap(p['extension_request']);
                       final extensionPending =
                           extensionRequest['status']?.toString() == 'pending';
+                      final extensionApproved =
+                          extensionRequest['status']?.toString() == 'approved';
                       final requestedByMe =
                           extensionRequest['requested_by']?.toString() ==
                           (widget.user['id']?.toString() ?? '');
                       return _ConnectionCard(
+                        profile: p,
+                        allowAllPhotos: _isPaidUser(widget.user),
                         name: p['name']?.toString() ?? 'User',
                         detail1: p['age'] != null
                             ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
@@ -3625,26 +4541,50 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                             const SizedBox(width: 8),
                             if (connectionId.isNotEmpty) ...[
                               _RoundIconButton(
-                                icon: extensionPending && !requestedByMe
+                                icon: extensionApproved
+                                    ? Icons.verified_rounded
+                                    : extensionPending && !requestedByMe
                                     ? Icons.check_circle_outline_rounded
                                     : Icons.update_rounded,
-                                background: const Color(0xFFFFF4DF),
-                                onTap: () => _run(
-                                  () => extensionPending && !requestedByMe
-                                      ? widget.api.approveConnectionExtension(
-                                          widget.token,
-                                          connectionId,
-                                        )
-                                      : widget.api.requestConnectionExtension(
-                                          widget.token,
-                                          connectionId,
-                                        ),
-                                  extensionPending && !requestedByMe
-                                      ? 'Connection extended by 15 days'
-                                      : 'Extension request sent',
-                                ),
-                                iconColor: const Color(0xFFB26A07),
+                                background: extensionApproved
+                                    ? const Color(0xFFEAF8EF)
+                                    : const Color(0xFFFFF4DF),
+                                onTap: extensionApproved
+                                    ? null
+                                    : () => _runExtension(
+                                        connectionId,
+                                        () => extensionPending && !requestedByMe
+                                            ? widget.api
+                                                  .approveConnectionExtension(
+                                                    widget.token,
+                                                    connectionId,
+                                                  )
+                                            : widget.api
+                                                  .requestConnectionExtension(
+                                                    widget.token,
+                                                    connectionId,
+                                                  ),
+                                        extensionPending && !requestedByMe
+                                            ? 'Connection extended by 15 days'
+                                            : 'Extension request sent',
+                                        approving:
+                                            extensionPending && !requestedByMe,
+                                      ),
+                                iconColor: extensionApproved
+                                    ? const Color(0xFF217A47)
+                                    : const Color(0xFFB26A07),
                               ),
+                              if (extensionApproved) ...[
+                                const SizedBox(width: 6),
+                                const Text(
+                                  'Accepted',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF217A47),
+                                  ),
+                                ),
+                              ],
                               const SizedBox(width: 8),
                             ],
                             _RoundIconButton(
@@ -3670,7 +4610,12 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                     emptyLabel: 'No received connections',
                     builder: (item) {
                       final p = Map<String, dynamic>.from(item as Map);
+                      if (_relationshipStatus(p).isEmpty) {
+                        _applyRelationshipStatus(p, 'REQUEST_RECEIVED');
+                      }
                       return _ConnectionCard(
+                        profile: p,
+                        allowAllPhotos: false,
                         name: p['name']?.toString() ?? 'User',
                         detail1: p['age'] != null
                             ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
@@ -3726,7 +4671,12 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                     emptyLabel: 'No sent connections',
                     builder: (item) {
                       final p = Map<String, dynamic>.from(item as Map);
+                      if (_relationshipStatus(p).isEmpty) {
+                        _applyRelationshipStatus(p, 'REQUEST_SENT');
+                      }
                       return _ConnectionCard(
+                        profile: p,
+                        allowAllPhotos: false,
                         name: p['name']?.toString() ?? 'User',
                         detail1: p['age'] != null
                             ? '${p['age']} yrs ${p['city'] != null ? '| ${p['city']}' : ''}'
@@ -3808,9 +4758,11 @@ class _MessagesTabState extends State<MessagesTab> {
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (_connections.isEmpty) setState(() => _loading = true);
     try {
-      final data = await widget.api.connections(widget.token);
+      final data = await widget.api
+          .connections(widget.token)
+          .timeout(const Duration(seconds: 8));
       final connections = List<dynamic>.from(
         data['connections'] as List? ?? <dynamic>[],
       );
@@ -4281,7 +5233,9 @@ class MatchProfilePage extends StatefulWidget {
 class _MatchProfilePageState extends State<MatchProfilePage> {
   bool _loading = true;
   Map<String, dynamic>? _profile;
+  Map<String, dynamic> _subscription = <String, dynamic>{};
   bool _requestSentLocally = false;
+  bool _requestAcceptedLocally = false;
 
   @override
   void initState() {
@@ -4294,9 +5248,30 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
     if (widget.profileId.isEmpty) return;
     setState(() => _loading = true);
     try {
-      final profile = await widget.api.profile(widget.token, widget.profileId);
+      final previousProfile = _profile == null
+          ? <String, dynamic>{}
+          : Map<String, dynamic>.from(_profile!);
+      final results = await Future.wait<dynamic>([
+        widget.api.profile(widget.token, widget.profileId),
+        widget.api
+            .currentSubscription(widget.token)
+            .catchError((_) => <String, dynamic>{}),
+      ]);
+      final profile = Map<String, dynamic>.from(results[0] as Map);
+      final subscription = _asMap(results[1]);
+      final refreshed = Map<String, dynamic>.from(profile);
+      final refreshedStatus = _relationshipStatus(refreshed);
+      final previousStatus = _relationshipStatus(previousProfile);
+      if ((refreshedStatus.isEmpty || refreshedStatus == 'NONE') &&
+          previousStatus.isNotEmpty &&
+          previousStatus != 'NONE') {
+        _applyRelationshipStatus(refreshed, previousStatus);
+      }
       if (!mounted) return;
-      setState(() => _profile = profile);
+      setState(() {
+        _profile = refreshed;
+        _subscription = subscription;
+      });
     } catch (_) {
       // Keep the passed profile visible if the detail refresh fails.
     } finally {
@@ -4332,30 +5307,75 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
     }
   }
 
+  Future<void> _acceptRequest() async {
+    try {
+      final response = await widget.api.acceptRequest(
+        widget.token,
+        widget.profileId,
+      );
+      if (!mounted) return;
+      setState(() {
+        _requestAcceptedLocally = true;
+        final profile = _profile ?? <String, dynamic>{};
+        _applyRelationshipStatus(
+          profile,
+          response['relationshipStatus']?.toString() ?? 'CONNECTED',
+        );
+        _profile = profile;
+      });
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Connection accepted')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = _profile;
     final connectedIds = List<dynamic>.from(
       widget.user['connections'] as List? ?? const <dynamic>[],
     ).map((id) => id.toString()).toSet();
+    final receivedIds = List<dynamic>.from(
+      widget.user['connectionRequestsReceived'] as List? ??
+          widget.user['connection_requests_received'] as List? ??
+          const <dynamic>[],
+    ).map((id) => id.toString()).toSet();
     final isConnected =
+        _requestAcceptedLocally ||
         (p != null && _alreadyConnectedFlag(p)) ||
         connectedIds.contains(widget.profileId);
     final requestSent =
         _requestSentLocally || (p != null && _requestSentFlag(p));
+    final requestReceived =
+        (p != null && _requestReceivedFlag(p)) ||
+        receivedIds.contains(widget.profileId);
+    final subscriptionUser = Map<String, dynamic>.from(widget.user)
+      ..['plan'] = _subscription['plan'] ?? widget.user['plan']
+      ..['features'] = _subscription['features'] ?? widget.user['features'];
     final isPaid =
-        (widget.user['plan']?.toString().toLowerCase() ?? 'free') != 'free';
+        (_subscription['subscriptionStatus']?.toString().toLowerCase() ==
+            'active') ||
+        (_subscription['subscription_status']?.toString().toLowerCase() ==
+            'active') ||
+        _isPaidUser(subscriptionUser);
     final canSeeContact = isPaid && isConnected;
-    final photoVisible =
-        (p?['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
     final allPhotos = p == null ? <String>[] : _photoUrls(p);
+    final canSeeExtraPhotos = isConnected && isPaid;
+    final visibleProfile = p == null
+        ? <String, dynamic>{}
+        : _galleryProfileFor(subscriptionUser, p, forceAll: canSeeExtraPhotos);
     final galleryPhotos = allPhotos.length > 1
         ? allPhotos.skip(1).toList()
         : <String>[];
     return Scaffold(
       backgroundColor: _postLoginBackground,
       body: _loading && _profile == null
-          ? const Center(child: CircularProgressIndicator())
+          ? const VSSkeletonLoader(count: 3)
           : p == null
           ? const Center(child: Text('Profile not found'))
           : Stack(
@@ -4366,8 +5386,63 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                     Container(
                       height: 400,
                       color: const Color(0xFFFFF0F0),
-                      child: _PhotoCarousel(profile: p, height: 400),
+                      child: _PhotoCarousel(
+                        profile: visibleProfile,
+                        height: 400,
+                      ),
                     ),
+                    if ((p['about']?.toString() ?? '').isNotEmpty)
+                      _CreamCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'About',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF4A2C0A),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              p['about'].toString(),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: _textColor,
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    if ((p['familyDetails']?.toString() ?? '').isNotEmpty ||
+                        (p['family_details']?.toString() ?? '').isNotEmpty)
+                      _CreamCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Family',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF4A2C0A),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              (p['familyDetails'] ?? p['family_details'])
+                                  .toString(),
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: _textColor,
+                                height: 1.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     Container(
                       margin: const EdgeInsets.all(16),
                       padding: const EdgeInsets.all(24),
@@ -4415,6 +5490,24 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                                     .trim(),
                           ),
                           _ProfileDetailRow(
+                            icon: Icons.groups_rounded,
+                            label: 'Sub-caste',
+                            value:
+                                p['subCaste']?.toString() ??
+                                p['sub_caste']?.toString() ??
+                                'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.cake_rounded,
+                            label: 'Date of Birth',
+                            value: canSeeContact
+                                ? (p['dateOfBirth']?.toString() ??
+                                      p['date_of_birth']?.toString() ??
+                                      p['dob']?.toString() ??
+                                      'N/A')
+                                : 'Visible after paid mutual connection',
+                          ),
+                          _ProfileDetailRow(
                             icon: Icons.school,
                             label: 'Education',
                             value: p['education']?.toString() ?? 'N/A',
@@ -4434,59 +5527,32 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                             label: 'Mother Tongue',
                             value: p['motherTongue']?.toString() ?? 'N/A',
                           ),
+                          _ProfileDetailRow(
+                            icon: Icons.restaurant_rounded,
+                            label: 'Diet',
+                            value: p['diet']?.toString() ?? 'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.auto_awesome_rounded,
+                            label: 'Manglik',
+                            value: p['manglik']?.toString() ?? 'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.account_balance_wallet_rounded,
+                            label: 'Family Financial Status',
+                            value:
+                                p['familyFinancialStatus']?.toString() ??
+                                p['family_financial_status']?.toString() ??
+                                'N/A',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.local_activity_rounded,
+                            label: 'Hobbies',
+                            value: p['hobbies']?.toString() ?? 'N/A',
+                          ),
                         ],
                       ),
                     ),
-                    if ((p['about']?.toString() ?? '').isNotEmpty)
-                      _CreamCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'About',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF4A2C0A),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              p['about'].toString(),
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: _textColor,
-                                height: 1.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if ((p['familyDetails']?.toString() ?? '').isNotEmpty)
-                      _CreamCard(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Family',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: Color(0xFF4A2C0A),
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              p['familyDetails'].toString(),
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: _textColor,
-                                height: 1.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
                     if (galleryPhotos.isNotEmpty)
                       _CreamCard(
                         child: Column(
@@ -4501,7 +5567,7 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                               ),
                             ),
                             const SizedBox(height: 16),
-                            if (isConnected && isPaid && photoVisible)
+                            if (canSeeExtraPhotos)
                               SizedBox(
                                 height: 94,
                                 child: ListView.separated(
@@ -4509,20 +5575,31 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                                   itemCount: galleryPhotos.length,
                                   separatorBuilder: (_, __) =>
                                       const SizedBox(width: 12),
-                                  itemBuilder: (_, index) => ClipRRect(
-                                    borderRadius: BorderRadius.circular(14),
-                                    child: _SmartImage(
-                                      source: galleryPhotos[index],
-                                      width: 94,
-                                      height: 94,
-                                      fit: BoxFit.cover,
-                                      fallback: () => Container(
+                                  itemBuilder: (_, index) => GestureDetector(
+                                    onTap: () =>
+                                        Navigator.of(context).push<void>(
+                                          MaterialPageRoute<void>(
+                                            builder: (_) => _PhotoViewer(
+                                              photos: allPhotos,
+                                              initialIndex: index + 1,
+                                            ),
+                                          ),
+                                        ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(14),
+                                      child: _SmartImage(
+                                        source: galleryPhotos[index],
                                         width: 94,
                                         height: 94,
-                                        color: const Color(0xFFFFF0F0),
-                                        child: const Icon(
-                                          Icons.person,
-                                          color: _borderColor,
+                                        fit: BoxFit.cover,
+                                        fallback: () => Container(
+                                          width: 94,
+                                          height: 94,
+                                          color: const Color(0xFFFFF0F0),
+                                          child: const Icon(
+                                            Icons.person,
+                                            color: _borderColor,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -4530,10 +5607,61 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                                 ),
                               )
                             else
-                              const VSGatedContentCard(
-                                title: 'More photos are subscriber-only',
-                                subtitle:
-                                    'The main profile photo is visible. Upgrade after connecting to view additional photos if the user allows it.',
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (galleryPhotos.isNotEmpty)
+                                    SizedBox(
+                                      height: 94,
+                                      child: ListView.separated(
+                                        scrollDirection: Axis.horizontal,
+                                        itemCount: galleryPhotos.length,
+                                        separatorBuilder: (_, __) =>
+                                            const SizedBox(width: 12),
+                                        itemBuilder: (_, index) => ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            14,
+                                          ),
+                                          child: Stack(
+                                            alignment: Alignment.center,
+                                            children: [
+                                              ImageFiltered(
+                                                imageFilter: ImageFilter.blur(
+                                                  sigmaX: 8,
+                                                  sigmaY: 8,
+                                                ),
+                                                child: _SmartImage(
+                                                  source: galleryPhotos[index],
+                                                  width: 94,
+                                                  height: 94,
+                                                  fit: BoxFit.cover,
+                                                  fallback: () => Container(
+                                                    width: 94,
+                                                    height: 94,
+                                                    color: const Color(
+                                                      0xFFFFF0F0,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const Icon(
+                                                Icons.lock_rounded,
+                                                color: Colors.white,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 12),
+                                  VSGatedContentCard(
+                                    title: isPaid
+                                        ? 'Connect to see more photos'
+                                        : 'Upgrade to see more photos',
+                                    subtitle:
+                                        'The profile photo is visible for free. Extra photos unlock only after subscription and mutual connection.',
+                                  ),
+                                ],
                               ),
                           ],
                         ),
@@ -4563,10 +5691,13 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                               value: p['phone']?.toString() ?? 'N/A',
                             ),
                           ] else
-                            const VSGatedContentCard(
-                              title: 'Upgrade to see contact details',
-                              subtitle:
-                                  'Subscribe to Focus or Commit plan and get matched',
+                            VSGatedContentCard(
+                              title: isPaid
+                                  ? 'Make connection to see details'
+                                  : 'Upgrade to see contact details',
+                              subtitle: isPaid
+                                  ? 'Once both sides are connected, email, phone, and date of birth become visible.'
+                                  : 'Subscribe to Focus or Commit plan and connect with this match.',
                             ),
                         ],
                       ),
@@ -4576,6 +5707,8 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                       child: FilledButton.icon(
                         onPressed: (isConnected || requestSent)
                             ? null
+                            : requestReceived
+                            ? _acceptRequest
                             : _connect,
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF8B0000),
@@ -4590,6 +5723,8 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                               ? 'Already Connected'
                               : requestSent
                               ? 'Request Sent'
+                              : requestReceived
+                              ? 'Accept Request'
                               : 'Send Connection Request',
                         ),
                       ),
@@ -4732,6 +5867,21 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return text;
   }
 
+  String _cleanPreferenceText(dynamic raw, {String defaultValue = 'Any'}) {
+    final values = _asList(raw)
+        .map((item) => item.toString().trim())
+        .where(
+          (item) => item.isNotEmpty && item != '[]' && !_isAnyPreference(item),
+        )
+        .toList();
+    if (values.isNotEmpty) return values.join(', ');
+    final text = raw?.toString().trim() ?? '';
+    if (text.isEmpty || text == '[]' || _isAnyPreference(text)) {
+      return defaultValue;
+    }
+    return text;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -4776,22 +5926,22 @@ class _EditProfilePageState extends State<EditProfilePage> {
     );
     final prefs = _asMap(p['partnerPreferences'] ?? p['partner_preferences']);
     _prefAgeMin = TextEditingController(
-      text: prefs['age_min']?.toString() ?? '',
+      text: prefs['age_min']?.toString() ?? '18',
     );
     _prefAgeMax = TextEditingController(
       text: prefs['age_max']?.toString() ?? '',
     );
     _prefLocation = TextEditingController(
-      text: _cleanSinglePreference(prefs['location']) ?? '',
+      text: _cleanPreferenceText(prefs['location'], defaultValue: 'Any'),
     );
     _prefProfession = TextEditingController(
-      text: _cleanSinglePreference(prefs['profession']) ?? '',
+      text: _cleanPreferenceText(prefs['profession'], defaultValue: 'Any'),
     );
     _prefReligion = TextEditingController(
       text: _cleanSinglePreference(prefs['religion']) ?? '',
     );
     _prefCaste = TextEditingController(
-      text: _cleanSinglePreference(prefs['caste']) ?? '',
+      text: _cleanPreferenceText(prefs['caste'], defaultValue: 'Any'),
     );
     _prefHeightMin = TextEditingController(
       text:
@@ -5007,6 +6157,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final name = _name.text.trim();
     final dob = _dob.text.trim();
     final phone = _phone.text.trim();
+    final phoneDigits = phone.replaceAll(RegExp(r'\D'), '');
     final age = _age(dob);
     if (widget.requireProfileCompletion) {
       final missing = <String>[];
@@ -5049,9 +6200,26 @@ class _EditProfilePageState extends State<EditProfilePage> {
         return;
       }
     }
+    if (phoneDigits.length != 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid 10 digit mobile number'),
+        ),
+      );
+      return;
+    }
     setState(() => _saving = true);
     try {
       final city = _city.text.trim();
+      final preferredMinAge = int.tryParse(_prefAgeMin.text.trim()) ?? 18;
+      if (preferredMinAge < 18) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Preferred min age cannot be below 18')),
+        );
+        setState(() => _saving = false);
+        return;
+      }
+      final preferredMaxAge = int.tryParse(_prefAgeMax.text.trim());
       await widget.api.updateProfile(widget.token, {
         'name': name,
         'dob': dob,
@@ -5063,7 +6231,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         'education': _education.text.trim(),
         'occupation': _occupation.text.trim(),
         'profession': _occupation.text.trim(),
-        'phone': phone,
+        'phone': phoneDigits,
         'religion': _religion.text.trim(),
         'height': _height.text.trim(),
         'income': _income.text.trim(),
@@ -5082,10 +6250,10 @@ class _EditProfilePageState extends State<EditProfilePage> {
         'family_financial_status': _familyFinancialStatus.text.trim(),
         'photoVisibility': _photoVisible ? 'yes' : 'no',
         'partner_preferences': {
-          'age_min': int.tryParse(_prefAgeMin.text.trim()),
-          'minAge': int.tryParse(_prefAgeMin.text.trim()),
-          'age_max': int.tryParse(_prefAgeMax.text.trim()),
-          'maxAge': int.tryParse(_prefAgeMax.text.trim()),
+          'age_min': preferredMinAge,
+          'minAge': preferredMinAge,
+          'age_max': preferredMaxAge,
+          'maxAge': preferredMaxAge,
           'location': _preferenceList(_prefLocation),
           'city': _preferenceList(_prefLocation),
           'profession': _preferenceList(_prefProfession),
@@ -5172,24 +6340,70 @@ class _EditProfilePageState extends State<EditProfilePage> {
   Future<void> _setPrimaryPhoto(int index) async {
     if (index < 0 || index >= _photos.length) return;
     final selected = _photos[index];
-    setState(() => _uploadingPhoto = true);
+    final reordered = <String>[
+      selected,
+      ..._photos.where((photo) => photo != selected),
+    ];
+    setState(() {
+      _uploadingPhoto = true;
+      _photos = reordered;
+    });
     try {
-      final ordered = await widget.api.setPrimaryPhoto(widget.token, index);
+      var ordered = <dynamic>[];
+      Object? lastError;
+      try {
+        ordered = await widget.api.setPrimaryPhotoPath(widget.token, selected);
+      } catch (e) {
+        lastError = e;
+      }
+      if (ordered.isEmpty) {
+        try {
+          ordered = await widget.api.setPrimaryPhoto(widget.token, index);
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (ordered.isEmpty) {
+        try {
+          final fallbackProfile = await widget.api.updateProfile(widget.token, {
+            'photos': reordered,
+            'profile_photo': selected,
+            'photoUrl': selected,
+          });
+          ordered = _photoUrls(fallbackProfile);
+        } catch (e) {
+          lastError = e;
+        }
+      }
+      if (ordered.isEmpty && lastError != null) {
+        throw lastError;
+      }
       final refreshedProfile = await widget.api.me(widget.token);
       if (!mounted) return;
+      final refreshedPhotos = _photoUrls(refreshedProfile);
+      final visiblePhotos = refreshedPhotos.contains(selected)
+          ? <String>[
+              selected,
+              ...refreshedPhotos.where((photo) => photo != selected),
+            ]
+          : (refreshedPhotos.isNotEmpty ? refreshedPhotos : reordered);
+      final effectiveProfile = Map<String, dynamic>.from(refreshedProfile);
+      final primaryPhoto = visiblePhotos.isNotEmpty
+          ? visiblePhotos.first
+          : selected;
+      effectiveProfile['photos'] = visiblePhotos;
+      effectiveProfile['profile_photo'] = primaryPhoto;
+      effectiveProfile['photoUrl'] = primaryPhoto;
+      effectiveProfile['profilePhoto'] = primaryPhoto;
+      effectiveProfile['avatar'] = primaryPhoto;
       setState(() {
         _photos = ordered.isNotEmpty
             ? ordered.map((item) => item.toString()).toList()
-            : <String>[
-                selected,
-                ..._photos.where((photo) => photo != selected),
-              ];
-        _photos = _photoUrls(refreshedProfile).isNotEmpty
-            ? _photoUrls(refreshedProfile)
-            : _photos;
+            : reordered;
+        _photos = visiblePhotos.isNotEmpty ? visiblePhotos : _photos;
       });
       if (widget.onProfileSaved != null) {
-        await widget.onProfileSaved!(refreshedProfile);
+        await widget.onProfileSaved!(effectiveProfile);
       }
       ScaffoldMessenger.of(
         context,
@@ -5768,18 +6982,14 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  _DropdownField(
+                  _MultiSelectField(
                     label: 'Hobbies',
-                    value: _selectedHobby,
-                    options: _mergeDropdownOptions(
-                      _hobbyOptions,
-                      _selectedHobby,
-                    ),
-                    hint: 'Select primary hobby',
-                    onChanged: (value) {
+                    controller: _hobbies,
+                    options: _mergeDropdownOptions(_hobbyOptions, null),
+                    hint: 'Select hobbies',
+                    onChanged: (values) {
                       setState(() {
-                        _selectedHobby = value;
-                        _hobbies.text = value ?? '';
+                        _selectedHobby = values.isEmpty ? null : values.first;
                       });
                     },
                   ),
@@ -5854,10 +7064,11 @@ class _EditProfilePageState extends State<EditProfilePage> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  _DropdownField(
+                  _MultiSelectField(
                     label: 'Preferred Caste',
-                    value: _selectedPrefCaste,
-                    options: _withAnyOptions(
+                    controller: _prefCaste,
+                    allowAny: true,
+                    options: _mergeDropdownOptions(
                       _availablePrefCastes,
                       _selectedPrefCaste,
                     ),
@@ -5866,42 +7077,47 @@ class _EditProfilePageState extends State<EditProfilePage> {
                             _isAnyPreference(_selectedPrefReligion)
                         ? 'Select religion first'
                         : 'Select caste',
-                    onChanged: (value) {
+                    onChanged: (values) {
                       setState(() {
-                        _selectedPrefCaste = value;
-                        _prefCaste.text = value ?? 'Any';
+                        _selectedPrefCaste = values.isEmpty
+                            ? 'Any'
+                            : values.join(', ');
                       });
                     },
                   ),
                   const SizedBox(height: 16),
-                  _DropdownField(
+                  _MultiSelectField(
                     label: 'Preferred Location',
-                    value: _selectedPrefLocation,
-                    options: _withAnyOptions(
+                    controller: _prefLocation,
+                    allowAny: true,
+                    options: _mergeDropdownOptions(
                       _stateOptions,
                       _selectedPrefLocation,
                     ),
                     hint: 'Any location',
-                    onChanged: (value) {
+                    onChanged: (values) {
                       setState(() {
-                        _selectedPrefLocation = value;
-                        _prefLocation.text = value ?? 'Any';
+                        _selectedPrefLocation = values.isEmpty
+                            ? 'Any'
+                            : values.join(', ');
                       });
                     },
                   ),
                   const SizedBox(height: 16),
-                  _DropdownField(
+                  _MultiSelectField(
                     label: 'Preferred Profession',
-                    value: _selectedPrefProfession,
-                    options: _withAnyOptions(
+                    controller: _prefProfession,
+                    allowAny: true,
+                    options: _mergeDropdownOptions(
                       _professionOptions,
                       _selectedPrefProfession,
                     ),
                     hint: 'Any profession',
-                    onChanged: (value) {
+                    onChanged: (values) {
                       setState(() {
-                        _selectedPrefProfession = value;
-                        _prefProfession.text = value ?? 'Any';
+                        _selectedPrefProfession = values.isEmpty
+                            ? 'Any'
+                            : values.join(', ');
                       });
                     },
                   ),
@@ -6045,6 +7261,58 @@ class _EditProfilePageState extends State<EditProfilePage> {
   }
 }
 
+class _FocusPriceDisplay extends StatelessWidget {
+  const _FocusPriceDisplay({
+    required this.textColor,
+    required this.mutedColor,
+    this.center = false,
+  });
+
+  final Color textColor;
+  final Color mutedColor;
+  final bool center;
+
+  @override
+  Widget build(BuildContext context) {
+    final column = Column(
+      crossAxisAlignment: center
+          ? CrossAxisAlignment.center
+          : CrossAxisAlignment.start,
+      children: [
+        Text(
+          'INR 4,990',
+          textAlign: center ? TextAlign.center : TextAlign.start,
+          style: TextStyle(
+            fontSize: center ? 18 : 16,
+            fontWeight: FontWeight.w800,
+            color: mutedColor,
+            decoration: TextDecoration.lineThrough,
+            decorationThickness: 2.2,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'INR 2,495',
+          textAlign: center ? TextAlign.center : TextAlign.start,
+          style: TextStyle(
+            fontSize: center ? 42 : 30,
+            fontWeight: FontWeight.w900,
+            color: textColor,
+            letterSpacing: -0.4,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '50% off for 3 months Focus membership',
+          textAlign: center ? TextAlign.center : TextAlign.start,
+          style: TextStyle(color: mutedColor, fontWeight: FontWeight.w800),
+        ),
+      ],
+    );
+    return center ? Center(child: column) : column;
+  }
+}
+
 class SubscriptionPage extends StatefulWidget {
   const SubscriptionPage({
     super.key,
@@ -6130,6 +7398,7 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
               itemBuilder: (_, index) {
                 final plan = Map<String, dynamic>.from(_plans[index] as Map);
                 final id = plan['id']?.toString() ?? '';
+                final isFocus = id.toLowerCase() == 'focus';
                 final current = id == widget.currentPlan;
                 final available = plan['available'] == true;
                 final features = List<dynamic>.from(
@@ -6151,14 +7420,38 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                         const SizedBox(height: 8),
                         Text(plan['tagline']?.toString() ?? ''),
                         const SizedBox(height: 8),
-                        Text(
-                          'INR ${plan['discountedPrice'] ?? plan['price']}',
-                          style: const TextStyle(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF8B0000),
+                        if (isFocus)
+                          const _FocusPriceDisplay(
+                            textColor: Color(0xFF8B0000),
+                            mutedColor: _textSecondaryColor,
+                          )
+                        else
+                          Text(
+                            (plan['display_price']
+                                        ?.toString()
+                                        .trim()
+                                        .isNotEmpty ==
+                                    true)
+                                ? plan['display_price'].toString()
+                                : 'INR ${plan['discountedPrice'] ?? plan['price']}',
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF8B0000),
+                            ),
                           ),
-                        ),
+                        if (!isFocus &&
+                            (plan['promo_text']?.toString().trim() ?? '')
+                                .isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            plan['promo_text'].toString(),
+                            style: const TextStyle(
+                              color: VSColors.primary,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         ...features.map(
                           (f) => Padding(
@@ -6395,17 +7688,45 @@ class _ReactSubscriptionPageState extends State<ReactSubscriptionPage> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        Center(
-                          child: Text(
-                            'INR ${plan['discountedPrice'] ?? plan['price'] ?? ''}',
-                            style: TextStyle(
-                              fontSize: 42,
-                              fontWeight: FontWeight.w800,
-                              color: textColor,
+                        if (!isFocus &&
+                            (plan['promo_text']?.toString().trim() ?? '')
+                                .isNotEmpty) ...[
+                          const SizedBox(height: 6),
+                          Center(
+                            child: Text(
+                              plan['promo_text'].toString(),
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: textColor,
+                                fontWeight: FontWeight.w800,
+                              ),
                             ),
                           ),
-                        ),
+                        ],
+                        const SizedBox(height: 16),
+                        if (isFocus)
+                          _FocusPriceDisplay(
+                            textColor: textColor,
+                            mutedColor: subtitleColor,
+                            center: true,
+                          )
+                        else
+                          Center(
+                            child: Text(
+                              (plan['display_price']
+                                          ?.toString()
+                                          .trim()
+                                          .isNotEmpty ==
+                                      true)
+                                  ? plan['display_price'].toString()
+                                  : 'INR ${plan['discountedPrice'] ?? plan['price'] ?? ''}',
+                              style: TextStyle(
+                                fontSize: 42,
+                                fontWeight: FontWeight.w800,
+                                color: textColor,
+                              ),
+                            ),
+                          ),
                         const SizedBox(height: 16),
                         ...features.map(
                           (feature) => Padding(
@@ -6550,6 +7871,22 @@ class _ChatPageState extends State<ChatPage> {
 
   String get _partnerId => widget.partner['id']?.toString() ?? '';
   String get _myId => widget.currentUser['id']?.toString() ?? '';
+  bool get _chatUnlocked =>
+      (widget.currentUser['plan']?.toString().toLowerCase() ?? 'free') !=
+      'free';
+
+  void _openUpgrade() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ReactSubscriptionPage(
+          api: widget.api,
+          token: widget.token,
+          currentPlan:
+              widget.currentUser['plan']?.toString().toLowerCase() ?? 'free',
+        ),
+      ),
+    );
+  }
 
   void _onTypingChanged() {
     if (!_typingEnabled) return;
@@ -6775,6 +8112,10 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _send() async {
+    if (!_chatUnlocked) {
+      _openUpgrade();
+      return;
+    }
     if (_text.text.trim().isEmpty) return;
     final content = _text.text.trim();
     final localMessage = ChatMessage(
@@ -7130,106 +8471,146 @@ class _ChatPageState extends State<ChatPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SizedBox(
-                    height: 38,
-                    child: ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: const [
-                        '😊',
-                        '❤️',
-                        '🙏',
-                        '👍',
-                        '🌹',
-                        '✨',
-                      ].length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (_, index) {
-                        const emojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
-                        return InkWell(
-                          onTap: () => _insertEmoji(emojis[index]),
-                          borderRadius: BorderRadius.circular(999),
+                  _EmojiStrip(onEmoji: _insertEmoji),
+                  if (false)
+                    SizedBox(
+                      height: 38,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: const [
+                          '😊',
+                          '❤️',
+                          '🙏',
+                          '👍',
+                          '🌹',
+                          '✨',
+                        ].length,
+                        separatorBuilder: (_, __) => const SizedBox(width: 8),
+                        itemBuilder: (_, index) {
+                          const emojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
+                          return InkWell(
+                            onTap: () => _insertEmoji(emojis[index]),
+                            borderRadius: BorderRadius.circular(999),
+                            child: Container(
+                              width: 38,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF0F0),
+                                borderRadius: BorderRadius.circular(999),
+                                border: Border.all(
+                                  color: const Color(0xFFE8DCC8),
+                                ),
+                              ),
+                              child: Text(
+                                emojis[index],
+                                style: const TextStyle(fontSize: 18),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                  if (!_chatUnlocked)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF0F0),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFFE8DCC8)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Subscribe to chat',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w800,
+                              color: _textColor,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'Upgrade to Focus to message active connections.',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: _textSecondaryColor,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          FilledButton(
+                            onPressed: _openUpgrade,
+                            child: const Text('Upgrade now'),
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    Row(
+                      children: [
+                        Expanded(
                           child: Container(
-                            width: 38,
-                            alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: const Color(0xFFFFF0F0),
-                              borderRadius: BorderRadius.circular(999),
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
                               border: Border.all(
                                 color: const Color(0xFFE8DCC8),
                               ),
-                            ),
-                            child: Text(
-                              emojis[index],
-                              style: const TextStyle(fontSize: 18),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(24),
-                            border: Border.all(color: const Color(0xFFE8DCC8)),
-                            boxShadow: const [
-                              BoxShadow(
-                                color: Color(0x0F000000),
-                                blurRadius: 10,
-                                offset: Offset(0, 4),
-                              ),
-                            ],
-                          ),
-                          child: TextField(
-                            controller: _text,
-                            decoration: const InputDecoration(
-                              hintText: 'Write a message',
-                              filled: false,
-                              border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 14,
-                              ),
-                            ),
-                            minLines: 1,
-                            maxLines: 4,
-                            onSubmitted: (_) => _send(),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      SizedBox(
-                        width: 44,
-                        height: 44,
-                        child: FilledButton(
-                          onPressed: _sending ? null : _send,
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF8B0000),
-                            shape: const CircleBorder(),
-                            padding: EdgeInsets.zero,
-                          ),
-                          child: _sending
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(
-                                  Icons.send,
-                                  color: Colors.white,
-                                  size: 20,
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x0F000000),
+                                  blurRadius: 10,
+                                  offset: Offset(0, 4),
                                 ),
+                              ],
+                            ),
+                            child: TextField(
+                              controller: _text,
+                              decoration: const InputDecoration(
+                                hintText: 'Write a message',
+                                filled: false,
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                  vertical: 14,
+                                ),
+                              ),
+                              minLines: 1,
+                              maxLines: 4,
+                              onSubmitted: (_) => _send(),
+                            ),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: 8),
+                        SizedBox(
+                          width: 44,
+                          height: 44,
+                          child: FilledButton(
+                            onPressed: _sending ? null : _send,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: const Color(0xFF8B0000),
+                              shape: const CircleBorder(),
+                              padding: EdgeInsets.zero,
+                            ),
+                            child: _sending
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(
+                                    Icons.send,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
@@ -7438,6 +8819,43 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 }
 
+class _EmojiStrip extends StatelessWidget {
+  const _EmojiStrip({required this.onEmoji});
+
+  final ValueChanged<String> onEmoji;
+
+  @override
+  Widget build(BuildContext context) {
+    const emojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
+    const fixedEmojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
+    return SizedBox(
+      height: 38,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: fixedEmojis.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, index) => InkWell(
+          onTap: () => onEmoji(fixedEmojis[index]),
+          borderRadius: BorderRadius.circular(999),
+          child: Container(
+            width: 38,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF0F0),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0xFFE8DCC8)),
+            ),
+            child: Text(
+              fixedEmojis[index],
+              style: const TextStyle(fontSize: 18),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class NotificationsPage extends StatefulWidget {
   const NotificationsPage({super.key, required this.api, required this.token});
 
@@ -7451,6 +8869,7 @@ class NotificationsPage extends StatefulWidget {
 class _NotificationsPageState extends State<NotificationsPage> {
   bool _loading = true;
   List<dynamic> _items = <dynamic>[];
+  final Set<String> _approvedExtensionIds = <String>{};
 
   @override
   void initState() {
@@ -7516,6 +8935,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
         message.contains('recommend')) {
       return 'matches';
     }
+    if (type.contains('visitor') || message.contains('viewed your profile')) {
+      return senderId.isEmpty ? 'notifications' : 'profile:$senderId';
+    }
     if (type.contains('connection') ||
         type.contains('request') ||
         type.contains('extension') ||
@@ -7524,6 +8946,23 @@ class _NotificationsPageState extends State<NotificationsPage> {
       return 'connections';
     }
     return 'notifications';
+  }
+
+  Future<void> _approveExtension(String connectionId) async {
+    try {
+      await widget.api.approveConnectionExtension(widget.token, connectionId);
+      if (!mounted) return;
+      setState(() => _approvedExtensionIds.add(connectionId));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Connection extended by 15 days')),
+      );
+      await _load();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
   }
 
   @override
@@ -7554,6 +8993,23 @@ class _NotificationsPageState extends State<NotificationsPage> {
                       item['createdAt']?.toString() ??
                       item['created_at']?.toString();
                   final payload = _payloadFor(item);
+                  final typeLower = type.toLowerCase();
+                  final connectionId =
+                      (item['connection_id'] ?? item['connectionId'] ?? '')
+                          .toString()
+                          .trim();
+                  final notificationStatus =
+                      (item['status'] ?? item['extension_status'] ?? '')
+                          .toString()
+                          .toLowerCase();
+                  final extensionAccepted =
+                      notificationStatus == 'accepted' ||
+                      typeLower.contains('extension_accepted') ||
+                      _approvedExtensionIds.contains(connectionId);
+                  final canApproveExtension =
+                      typeLower.contains('extension_request') &&
+                      connectionId.isNotEmpty &&
+                      !extensionAccepted;
                   return Material(
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
@@ -7611,6 +9067,31 @@ class _NotificationsPageState extends State<NotificationsPage> {
                                       style: const TextStyle(
                                         fontSize: 12,
                                         color: _textSecondaryColor,
+                                      ),
+                                    ),
+                                  ],
+                                  if (canApproveExtension) ...[
+                                    const SizedBox(height: 10),
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: FilledButton.icon(
+                                        onPressed: () =>
+                                            _approveExtension(connectionId),
+                                        icon: const Icon(
+                                          Icons.check_circle_outline_rounded,
+                                          size: 18,
+                                        ),
+                                        label: const Text('Accept extension'),
+                                      ),
+                                    ),
+                                  ],
+                                  if (extensionAccepted) ...[
+                                    const SizedBox(height: 10),
+                                    const Text(
+                                      'Extension accepted',
+                                      style: TextStyle(
+                                        color: Color(0xFF217A47),
+                                        fontWeight: FontWeight.w800,
                                       ),
                                     ),
                                   ],
@@ -7844,6 +9325,75 @@ class HelpSupportPage extends StatelessWidget {
   }
 }
 
+const String _aboutVivaahSetuText = '''
+VivaahSetu is a modern matchmaking platform designed to simplify and personalize the journey of finding the right life partner.
+
+Built with a focus on trust, compatibility, and meaningful connections, VivaahSetu bridges traditional matchmaking values with today's digital expectations. The platform offers intelligent matching based on preferences, lifestyle, and long-term compatibility while emphasizing verified profiles, privacy controls, and a safe user experience.
+
+VivaahSetu is committed to transparency, accountability, and user-centric data protection practices.
+''';
+
+const String _termsPrivacyText = '''
+Privacy Policy
+
+VivaahSetu acts as the data controller for personal data collected through the platform. We collect profile information, preferences, photographs, technical data, and voluntarily shared sensitive details such as religion or community to provide matchmaking and communication services.
+
+Personal data is processed based on consent, contractual necessity, legitimate interest, and legal obligations. Data may be shared with other users according to privacy settings, service providers, and authorities when legally required. VivaahSetu does not sell personal data.
+
+Users may access, correct, delete, withdraw consent, restrict processing, object to processing, and request data portability where applicable. Consent can be withdrawn at any time.
+
+Terms & Conditions
+
+Users must be legally eligible for marriage, provide truthful information, and use VivaahSetu only for genuine matrimonial purposes. Fake profiles, impersonation, harassment, financial scams, offensive content, scraping, or misuse are prohibited.
+
+VivaahSetu acts as an intermediary and is not responsible for user-generated content, accuracy of user information, or outcomes of user interactions. Accounts may be suspended for terms violations, fraudulent activity, or regulatory requirements.
+
+These terms are governed by the laws of India.
+''';
+
+const String _securitySafetyText = '''
+VivaahSetu follows privacy-first design, minimal data collection, secure authentication, access controls, and monitoring to protect users.
+
+Users should verify profile details through calls and family introductions, meet in public places, avoid sharing OTPs, bank details, passwords, or sensitive documents, and report suspicious activity immediately.
+
+In case of a data breach, VivaahSetu will notify users and authorities where required by applicable law.
+''';
+
+class _LegalTextBlock extends StatelessWidget {
+  const _LegalTextBlock({required this.title, required this.body});
+
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return _CreamCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              color: _textColor,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            body.trim(),
+            style: const TextStyle(
+              fontSize: 14,
+              color: _textSecondaryColor,
+              height: 1.48,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
@@ -7854,34 +9404,16 @@ class AboutPage extends StatelessWidget {
       appBar: AppBar(title: const Text('About VivaahSetu')),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: [
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'VivaahSetu',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                    color: _textColor,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'A serious-intent matrimonial platform focused on meaningful matches, limited active connections, and authentic profiles.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-                SizedBox(height: 14),
-                Text(
-                  'Version: 1.0.0',
-                  style: TextStyle(fontSize: 13, color: _textSecondaryColor),
-                ),
-              ],
+        children: const [
+          _LegalTextBlock(
+            title: 'About VivaahSetu',
+            body: _aboutVivaahSetuText,
+          ),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Text(
+              'Version: 1.0.2',
+              style: TextStyle(fontSize: 13, color: _textSecondaryColor),
             ),
           ),
         ],
@@ -7900,72 +9432,10 @@ class SecuritySafetyPage extends StatelessWidget {
       appBar: AppBar(title: const Text('Security & Safety Tips')),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: [
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'Meet Safely',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: _textColor,
-                  ),
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'Verify profile details through calls and family introductions before making commitments.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Prefer public places for first meetings and share plans with a trusted person.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'Protect Your Data',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: _textColor,
-                  ),
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'Never share OTPs, bank details, passwords, or sensitive identity documents in chat.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Report suspicious payment requests or mismatched identity claims immediately.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
+        children: const [
+          _LegalTextBlock(
+            title: 'Security & Safety',
+            body: _securitySafetyText,
           ),
         ],
       ),
@@ -7983,64 +9453,8 @@ class TermsPrivacyPage extends StatelessWidget {
       appBar: AppBar(title: const Text('Terms & Privacy')),
       body: ListView(
         padding: const EdgeInsets.all(16),
-        children: [
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'Terms of Use',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: _textColor,
-                  ),
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'Use VivaahSetu only for genuine matrimonial purposes. Fake profiles, harassment, scraping, and misuse are prohibited.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          _CreamCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
-                  'Privacy Notice',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: _textColor,
-                  ),
-                ),
-                SizedBox(height: 10),
-                Text(
-                  'Your profile, communication preferences, and account activity are used to deliver matches, notifications, and safety features.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-                SizedBox(height: 8),
-                Text(
-                  'Profile visibility and chat-status controls can be changed anytime from Settings.',
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: _textSecondaryColor,
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
-          ),
+        children: const [
+          _LegalTextBlock(title: 'Terms & Privacy', body: _termsPrivacyText),
         ],
       ),
     );
@@ -8059,7 +9473,7 @@ class _BottomNavItem extends StatelessWidget {
   final String label;
   final IconData icon;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final int badgeCount;
 
   @override
@@ -8153,7 +9567,7 @@ class _HomeMetricCard extends StatelessWidget {
   final String value;
   final String label;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -8227,16 +9641,19 @@ class _HomeProfilePreviewCard extends StatelessWidget {
     required this.profile,
     required this.onTap,
     required this.onConnect,
+    required this.onAccept,
   });
 
   final Map<String, dynamic> profile;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final VoidCallback onConnect;
+  final VoidCallback onAccept;
 
   @override
   Widget build(BuildContext context) {
     final alreadyConnected = profile['alreadyConnected'] == true;
     final requestSent = profile['requestSent'] == true;
+    final requestReceived = profile['requestReceived'] == true;
     final age = profile['age']?.toString();
     final city = profile['city']?.toString().trim() ?? '';
     final occupation = (profile['occupation'] ?? profile['profession'] ?? '')
@@ -8250,6 +9667,8 @@ class _HomeProfilePreviewCard extends StatelessWidget {
         ? 'Connected'
         : requestSent
         ? 'Request Sent'
+        : requestReceived
+        ? 'Accept Request'
         : 'New match';
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
@@ -8281,7 +9700,7 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                 child: SizedBox(
                   width: 116,
                   height: 148,
-                  child: _CoverPhoto(
+                  child: _PhotoCarousel(
                     profile: profile,
                     height: 148,
                     radius: BorderRadius.circular(18),
@@ -8299,6 +9718,8 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                           ? Icons.verified_rounded
                           : requestSent
                           ? Icons.schedule_send_rounded
+                          : requestReceived
+                          ? Icons.mark_email_unread_rounded
                           : Icons.auto_awesome_rounded,
                       foreground: alreadyConnected
                           ? const Color(0xFF217A47)
@@ -8361,6 +9782,8 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                         FilledButton(
                           onPressed: (alreadyConnected || requestSent)
                               ? null
+                              : requestReceived
+                              ? onAccept
                               : onConnect,
                           style: FilledButton.styleFrom(
                             minimumSize: const Size(80, 32),
@@ -8374,6 +9797,8 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                                 ? 'Connected'
                                 : requestSent
                                 ? 'Sent'
+                                : requestReceived
+                                ? 'Accept'
                                 : 'Connect Now',
                           ),
                         ),
@@ -8431,6 +9856,177 @@ class _DropdownField extends StatelessWidget {
                 DropdownMenuItem<String>(value: option, child: Text(option)),
           )
           .toList(),
+    );
+  }
+}
+
+class _MultiSelectField extends StatelessWidget {
+  const _MultiSelectField({
+    required this.label,
+    required this.controller,
+    required this.options,
+    required this.onChanged,
+    this.allowAny = false,
+    this.hint,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final List<String> options;
+  final ValueChanged<List<String>> onChanged;
+  final bool allowAny;
+  final String? hint;
+
+  List<String> _values() {
+    final raw = controller.text.trim();
+    if (raw.isEmpty || _isAnyPreference(raw)) return allowAny ? ['Any'] : [];
+    return raw
+        .split(',')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty)
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = _values();
+    final display = selected.isEmpty
+        ? (hint ?? 'Select')
+        : selected.contains('Any')
+        ? 'Any'
+        : selected.join(', ');
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () async {
+        final result = await showModalBottomSheet<List<String>>(
+          context: context,
+          isScrollControlled: true,
+          builder: (_) => _MultiSelectSheet(
+            title: label,
+            options: allowAny ? _withAnyOptions(options, null) : options,
+            selected: selected,
+            allowAny: allowAny,
+          ),
+        );
+        if (result == null) return;
+        final normalized = allowAny && result.contains('Any')
+            ? <String>['Any']
+            : result.where((item) => !_isAnyPreference(item)).toList();
+        controller.text = normalized.join(', ');
+        onChanged(normalized);
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: hint,
+          fillColor: const Color(0xFFFFFDF5),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFE8DCC8)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: const BorderSide(color: Color(0xFFE8DCC8)),
+          ),
+          suffixIcon: const Icon(Icons.expand_more_rounded),
+        ),
+        child: Text(
+          display,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: selected.isEmpty ? _textSecondaryColor : _textColor,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MultiSelectSheet extends StatefulWidget {
+  const _MultiSelectSheet({
+    required this.title,
+    required this.options,
+    required this.selected,
+    required this.allowAny,
+  });
+
+  final String title;
+  final List<String> options;
+  final List<String> selected;
+  final bool allowAny;
+
+  @override
+  State<_MultiSelectSheet> createState() => _MultiSelectSheetState();
+}
+
+class _MultiSelectSheetState extends State<_MultiSelectSheet> {
+  late final Set<String> _selected = widget.selected.toSet();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 12,
+          bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.title,
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            ),
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.58,
+              ),
+              child: ListView(
+                shrinkWrap: true,
+                children: widget.options.map((option) {
+                  final checked = _selected.contains(option);
+                  return CheckboxListTile(
+                    value: checked,
+                    title: Text(option),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    activeColor: _primaryColor,
+                    onChanged: (value) {
+                      setState(() {
+                        if (option == 'Any' && value == true) {
+                          _selected
+                            ..clear()
+                            ..add('Any');
+                          return;
+                        }
+                        _selected.remove('Any');
+                        if (value == true) {
+                          _selected.add(option);
+                        } else {
+                          _selected.remove(option);
+                        }
+                      });
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(_selected.toList()),
+              style: FilledButton.styleFrom(
+                backgroundColor: _primaryColor,
+                minimumSize: const Size.fromHeight(46),
+              ),
+              child: const Text('Apply'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -8507,6 +10103,81 @@ class _MiniDetail extends StatelessWidget {
   }
 }
 
+class VSSkeletonLoader extends StatelessWidget {
+  const VSSkeletonLoader({super.key, this.count = 4});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      padding: const EdgeInsets.all(16),
+      itemCount: count,
+      separatorBuilder: (_, __) => const SizedBox(height: 14),
+      itemBuilder: (_, index) => const _SkeletonCard(),
+    );
+  }
+}
+
+class _SkeletonCard extends StatelessWidget {
+  const _SkeletonCard();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget block(double width, double height, {double radius = 12}) {
+      return Container(
+            width: width,
+            height: height,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.75),
+              borderRadius: BorderRadius.circular(radius),
+            ),
+          )
+          .animate(onPlay: (controller) => controller.repeat(reverse: true))
+          .fade(
+            begin: 0.38,
+            end: 1,
+            duration: const Duration(milliseconds: 850),
+          );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8F1),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: VSColors.border.withValues(alpha: 0.7)),
+      ),
+      child: Row(
+        children: [
+          block(82, 96, radius: 18),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                block(double.infinity, 16),
+                const SizedBox(height: 10),
+                block(180, 12),
+                const SizedBox(height: 10),
+                block(120, 12),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(child: block(double.infinity, 36, radius: 18)),
+                    const SizedBox(width: 10),
+                    Expanded(child: block(double.infinity, 36, radius: 18)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ConnectionsPane extends StatelessWidget {
   const _ConnectionsPane({
     required this.loading,
@@ -8523,7 +10194,7 @@ class _ConnectionsPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (loading && items.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      return const VSSkeletonLoader(count: 4);
     }
     if (items.isEmpty) {
       return ListView(
@@ -8560,6 +10231,8 @@ class _ConnectionsPane extends StatelessWidget {
 
 class _ConnectionCard extends StatelessWidget {
   const _ConnectionCard({
+    required this.profile,
+    required this.allowAllPhotos,
     required this.name,
     required this.detail1,
     required this.detail2,
@@ -8568,6 +10241,8 @@ class _ConnectionCard extends StatelessWidget {
     this.onTap,
   });
 
+  final Map<String, dynamic> profile;
+  final bool allowAllPhotos;
   final String name;
   final String detail1;
   final String detail2;
@@ -8577,6 +10252,13 @@ class _ConnectionCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final galleryProfile = Map<String, dynamic>.from(profile);
+    final photos = _photoUrls(galleryProfile);
+    galleryProfile['photos'] = photos;
+    galleryProfile['visiblePhotoCount'] = allowAllPhotos
+        ? photos.length
+        : (photos.isEmpty ? 0 : 1);
+    galleryProfile['canViewAllPhotos'] = allowAllPhotos;
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(18),
@@ -8584,13 +10266,26 @@ class _ConnectionCard extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(18),
         child: Container(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: _borderColor),
           ),
           child: Row(
             children: [
+              SizedBox(
+                width: 58,
+                height: 68,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: _PhotoCarousel(
+                    profile: galleryProfile,
+                    height: 68,
+                    radius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -8661,8 +10356,8 @@ class _BrowseSectionChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         onTap: onTap,
         child: Container(
-          width: 168,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          width: 154,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: selected ? _primaryColor : _borderColor),
@@ -8685,7 +10380,7 @@ class _BrowseSectionChip extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 12,
+                        fontSize: 11,
                         fontWeight: FontWeight.w800,
                         color: selected ? Colors.white : _textColor,
                       ),
@@ -8695,7 +10390,7 @@ class _BrowseSectionChip extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 10,
+                        fontSize: 9.5,
                         color: selected ? Colors.white70 : _textSecondaryColor,
                       ),
                     ),
@@ -8721,7 +10416,7 @@ class _RoundIconButton extends StatelessWidget {
   final IconData icon;
   final Color background;
   final Color iconColor;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -9093,6 +10788,12 @@ class _SmartImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final screen = MediaQuery.sizeOf(context);
+    final logicalWidth = width.isFinite ? width : screen.width;
+    final logicalHeight = height.isFinite ? height : screen.height;
+    final cacheWidth = (logicalWidth * dpr).clamp(1, 1600).round();
+    final cacheHeight = (logicalHeight * dpr).clamp(1, 2200).round();
     final data = _decodeDataImage(source);
     if (data != null) {
       return Image.memory(
@@ -9100,6 +10801,9 @@ class _SmartImage extends StatelessWidget {
         width: width,
         height: height,
         fit: fit,
+        cacheWidth: cacheWidth,
+        cacheHeight: cacheHeight,
+        gaplessPlayback: true,
         errorBuilder: (_, __, ___) => fallback(),
       );
     }
@@ -9108,7 +10812,14 @@ class _SmartImage extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
+      cacheWidth: cacheWidth,
+      cacheHeight: cacheHeight,
+      gaplessPlayback: true,
       errorBuilder: (_, __, ___) => fallback(),
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return fallback();
+      },
     );
   }
 }
@@ -9141,6 +10852,13 @@ class _PhotoCarouselState extends State<_PhotoCarousel> {
         radius: widget.radius,
       );
     }
+    final rawVisibleCount = widget.profile['visiblePhotoCount'];
+    final visibleCount = rawVisibleCount is num
+        ? rawVisibleCount.toInt().clamp(0, photos.length)
+        : photos.length;
+    final canViewAll =
+        widget.profile['canViewAllPhotos'] == true ||
+        visibleCount >= photos.length;
     return ClipRRect(
       borderRadius: widget.radius,
       child: Stack(
@@ -9149,18 +10867,13 @@ class _PhotoCarouselState extends State<_PhotoCarousel> {
           PageView.builder(
             itemCount: photos.length,
             onPageChanged: (value) => setState(() => _index = value),
-            itemBuilder: (_, index) => GestureDetector(
-              onTap: () => Navigator.of(context).push<void>(
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      _PhotoViewer(photos: photos, initialIndex: index),
-                ),
-              ),
-              child: _SmartImage(
+            itemBuilder: (_, index) {
+              final locked = !canViewAll && index >= visibleCount;
+              final containedImage = _SmartImage(
                 source: photos[index],
                 width: double.infinity,
                 height: widget.height,
-                fit: BoxFit.cover,
+                fit: BoxFit.contain,
                 fallback: () => Container(
                   color: const Color(0xFFFFF0F0),
                   alignment: Alignment.center,
@@ -9170,15 +10883,108 @@ class _PhotoCarouselState extends State<_PhotoCarousel> {
                     color: _borderColor,
                   ),
                 ),
+              );
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  if (locked) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Subscribe and connect to view more photos',
+                        ),
+                      ),
+                    );
+                    return;
+                  }
+                  final viewerPhotos = canViewAll
+                      ? photos
+                      : photos.take(visibleCount).toList();
+                  Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => _PhotoViewer(
+                        photos: viewerPhotos,
+                        initialIndex: index.clamp(0, viewerPhotos.length - 1),
+                      ),
+                    ),
+                  );
+                },
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    const ColoredBox(color: Color(0xFFFFF4F6)),
+                    if (locked)
+                      ImageFiltered(
+                        imageFilter: ImageFilter.blur(sigmaX: 9, sigmaY: 9),
+                        child: containedImage,
+                      )
+                    else
+                      containedImage,
+                    if (locked)
+                      Container(
+                        color: Colors.black.withValues(alpha: 0.30),
+                        alignment: Alignment.center,
+                        child: const Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.lock_rounded,
+                              color: Colors.white,
+                              size: 26,
+                            ),
+                            SizedBox(height: 6),
+                            Text(
+                              'Locked photo',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              );
+            },
+          ),
+          if (!canViewAll && photos.length > visibleCount)
+            Positioned(
+              top: 12,
+              left: 12,
+              child: IgnorePointer(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.45),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.lock_rounded, color: Colors.white, size: 13),
+                      SizedBox(width: 5),
+                      Text(
+                        'More photos locked',
+                        style: TextStyle(color: Colors.white, fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
-          ),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [Colors.transparent, Color(0x33000000)],
+          const IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Color(0x33000000)],
+                ),
               ),
             ),
           ),
@@ -9187,20 +10993,22 @@ class _PhotoCarouselState extends State<_PhotoCarousel> {
               bottom: 14,
               left: 0,
               right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                  photos.length,
-                  (dot) => AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width: dot == _index ? 18 : 7,
-                    height: 7,
-                    decoration: BoxDecoration(
-                      color: dot == _index
-                          ? Colors.white
-                          : Colors.white.withValues(alpha: 0.55),
-                      borderRadius: BorderRadius.circular(99),
+              child: IgnorePointer(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(
+                    photos.length,
+                    (dot) => AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      width: dot == _index ? 18 : 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: dot == _index
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
                     ),
                   ),
                 ),
@@ -9209,23 +11017,25 @@ class _PhotoCarouselState extends State<_PhotoCarousel> {
           const Positioned(
             right: 12,
             bottom: 12,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Color(0x8A000000),
-                borderRadius: BorderRadius.all(Radius.circular(999)),
-              ),
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.zoom_out_map, color: Colors.white, size: 14),
-                    SizedBox(width: 4),
-                    Text(
-                      'Tap to view',
-                      style: TextStyle(color: Colors.white, fontSize: 11),
-                    ),
-                  ],
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Color(0x8A000000),
+                  borderRadius: BorderRadius.all(Radius.circular(999)),
+                ),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.zoom_out_map, color: Colors.white, size: 14),
+                      SizedBox(width: 4),
+                      Text(
+                        'Tap to view',
+                        style: TextStyle(color: Colors.white, fontSize: 11),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -9276,22 +11086,32 @@ class _PhotoViewerState extends State<_PhotoViewer> {
         controller: _controller,
         itemCount: widget.photos.length,
         onPageChanged: (value) => setState(() => _index = value),
-        itemBuilder: (_, index) => InteractiveViewer(
-          minScale: 1,
-          maxScale: 4,
-          child: Center(
-            child: _SmartImage(
-              source: widget.photos[index],
-              width: double.infinity,
-              height: double.infinity,
-              fit: BoxFit.contain,
-              fallback: () => const Icon(
-                Icons.broken_image_outlined,
-                color: Colors.white54,
-                size: 64,
+        itemBuilder: (_, index) => LayoutBuilder(
+          builder: (context, constraints) {
+            final width = constraints.maxWidth.isFinite
+                ? constraints.maxWidth
+                : MediaQuery.sizeOf(context).width;
+            final height = constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : MediaQuery.sizeOf(context).height;
+            return InteractiveViewer(
+              minScale: 1,
+              maxScale: 4,
+              child: Center(
+                child: _SmartImage(
+                  source: widget.photos[index],
+                  width: width,
+                  height: height,
+                  fit: BoxFit.contain,
+                  fallback: () => const Icon(
+                    Icons.broken_image_outlined,
+                    color: Colors.white54,
+                    size: 64,
+                  ),
+                ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ),
     );
