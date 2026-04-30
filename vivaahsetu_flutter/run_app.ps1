@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $flutterBin = "C:\Users\varun\Development\flutter\bin\flutter.bat"
+$backendUrl = "https://api.vivaahsetu.in"
 $localPubCache = Join-Path (Split-Path -Parent $projectRoot) ".pub-cache"
 $packageConfig = Join-Path $projectRoot ".dart_tool\package_config.json"
 $androidGradleDir = Join-Path $projectRoot "android\.gradle"
@@ -13,7 +14,6 @@ if (-not (Test-Path $flutterBin)) {
 
 New-Item -ItemType Directory -Force -Path $localPubCache | Out-Null
 $env:PUB_CACHE = $localPubCache
-$env:BACKEND_URL = "https://api.vivaahsetu.in"
 
 function Remove-StaleState {
   Write-Host "Repairing Flutter metadata for this repo..." -ForegroundColor Yellow
@@ -40,7 +40,7 @@ if (-not $deviceLines) {
 }
 
 $deviceId = ($deviceLines[0] -split "\s+")[0]
-Write-Host "Launching on device $deviceId with PUB_CACHE=$localPubCache and BACKEND_URL=$env:BACKEND_URL" -ForegroundColor Green
+Write-Host "Launching on device $deviceId with PUB_CACHE=$localPubCache and BACKEND_URL=$backendUrl" -ForegroundColor Green
 
 Set-Location $projectRoot
-& $flutterBin run -d $deviceId --fast-start --no-pub --no-enable-impeller --target lib/main.dart --dart-define BACKEND_URL=$env:BACKEND_URL
+& $flutterBin run -d $deviceId --fast-start --no-pub --dart-define="BACKEND_URL=$backendUrl" --target lib/main.dart

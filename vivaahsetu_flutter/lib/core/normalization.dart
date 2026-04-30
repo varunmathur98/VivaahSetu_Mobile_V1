@@ -117,6 +117,10 @@ Map<String, dynamic> normalizeUserPayload(Map<String, dynamic> raw) {
   user['motherTongue'] ??= user['mother_tongue'];
   user['subCaste'] ??= user['sub_caste'];
   user['subCaste'] ??= user['subcast'];
+  user['birthTime'] ??= user['birth_time'];
+  user['birthPlace'] ??= user['birth_place'];
+  user['profileManagedBy'] ??= user['profile_managed_by'];
+  user['profile_managed_by'] ??= user['profileManagedBy'];
   if ((user['avatar']?.toString().trim() ?? '').isEmpty) {
     user['avatar'] = profilePhoto;
   }
@@ -219,6 +223,8 @@ Map<String, dynamic> normalizeMatchFilters(Map<String, dynamic> raw) {
     'income_max',
     'diet',
     'manglik',
+    'profileManagedBy',
+    'profile_managed_by',
   ]) {
     final value = input[key];
     if (value != null && value.toString().trim().isNotEmpty) {

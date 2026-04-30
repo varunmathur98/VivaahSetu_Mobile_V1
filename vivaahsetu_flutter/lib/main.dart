@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'dart:ui';
 
 import 'package:app_links/app_links.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -294,6 +295,32 @@ String? _resolveMediaUrl(String? raw) => adapter.resolveMediaUrl(_baseUrl, raw);
 List<String> _photoUrls(Map<String, dynamic> data) =>
     adapter.photoUrls(_baseUrl, data);
 
+Future<void> _warmPhotoCache(
+  BuildContext context,
+  Iterable<Map<String, dynamic>> profiles, {
+  int profileLimit = 10,
+  int photosPerProfile = 1,
+}) async {
+  final urls = <String>[];
+  for (final profile in profiles.take(profileLimit)) {
+    urls.addAll(_photoUrls(profile).take(photosPerProfile));
+  }
+  final deduped = <String>{};
+  for (final url in urls) {
+    final trimmed = url.trim();
+    if (trimmed.isNotEmpty) {
+      deduped.add(trimmed);
+    }
+  }
+  for (final url in deduped) {
+    try {
+      await precacheImage(CachedNetworkImageProvider(url), context);
+    } catch (_) {
+      // Keep warm-up best-effort so it never blocks rendering.
+    }
+  }
+}
+
 bool _isPaidUser(Map<String, dynamic> user) {
   final features = _asMap(user['features']);
   final plan = (user['plan'] ?? user['subscriptionPlan'] ?? '')
@@ -303,6 +330,244 @@ bool _isPaidUser(Map<String, dynamic> user) {
       features['chat_unlocked'] == true ||
       features['view_contact_details'] == true ||
       features['canViewExtraPhotos'] == true;
+}
+
+const List<String> _profileManagedByOptions = <String>[
+  'Self',
+  'Parent',
+  'Sibling',
+  'Relative',
+  'Friend',
+  'Marriage Bureau',
+];
+
+String _formatTimeOfDay(TimeOfDay value) {
+  final hour = value.hourOfPeriod == 0 ? 12 : value.hourOfPeriod;
+  final minute = value.minute.toString().padLeft(2, '0');
+  final suffix = value.period == DayPeriod.am ? 'AM' : 'PM';
+  return '${hour.toString().padLeft(2, '0')}:$minute $suffix';
+}
+
+TimeOfDay _parseBirthTime(String value) {
+  final match = RegExp(
+    r'^(\d{1,2}):(\d{2})\s*(AM|PM)$',
+    caseSensitive: false,
+  ).firstMatch(value.trim());
+  if (match == null) return const TimeOfDay(hour: 9, minute: 0);
+  var hour = int.tryParse(match.group(1) ?? '') ?? 9;
+  final minute = int.tryParse(match.group(2) ?? '') ?? 0;
+  final suffix = (match.group(3) ?? 'AM').toUpperCase();
+  if (suffix == 'PM' && hour < 12) hour += 12;
+  if (suffix == 'AM' && hour == 12) hour = 0;
+  return TimeOfDay(hour: hour.clamp(0, 23), minute: minute.clamp(0, 59));
+}
+
+String? _zodiacSignFromDob(String? rawDob) {
+  final dob = DateTime.tryParse((rawDob ?? '').trim());
+  if (dob == null) return null;
+  final day = dob.day;
+  final month = dob.month;
+  if ((month == 3 && day >= 21) || (month == 4 && day <= 19)) return 'Aries';
+  if ((month == 4 && day >= 20) || (month == 5 && day <= 20)) return 'Taurus';
+  if ((month == 5 && day >= 21) || (month == 6 && day <= 20)) return 'Gemini';
+  if ((month == 6 && day >= 21) || (month == 7 && day <= 22)) return 'Cancer';
+  if ((month == 7 && day >= 23) || (month == 8 && day <= 22)) return 'Leo';
+  if ((month == 8 && day >= 23) || (month == 9 && day <= 22)) return 'Virgo';
+  if ((month == 9 && day >= 23) || (month == 10 && day <= 22)) return 'Libra';
+  if ((month == 10 && day >= 23) || (month == 11 && day <= 21))
+    return 'Scorpio';
+  if ((month == 11 && day >= 22) || (month == 12 && day <= 21))
+    return 'Sagittarius';
+  if ((month == 12 && day >= 22) || (month == 1 && day <= 19))
+    return 'Capricorn';
+  if ((month == 1 && day >= 20) || (month == 2 && day <= 18)) return 'Aquarius';
+  return 'Pisces';
+}
+
+int _horoscopeScore(String? mine, String? theirs) {
+  if (mine == null || theirs == null) return 62;
+  if (mine == theirs) return 88;
+  const elements = {
+    'Aries': 'Fire',
+    'Leo': 'Fire',
+    'Sagittarius': 'Fire',
+    'Taurus': 'Earth',
+    'Virgo': 'Earth',
+    'Capricorn': 'Earth',
+    'Gemini': 'Air',
+    'Libra': 'Air',
+    'Aquarius': 'Air',
+    'Cancer': 'Water',
+    'Scorpio': 'Water',
+    'Pisces': 'Water',
+  };
+  final a = elements[mine];
+  final b = elements[theirs];
+  if (a == b) return 84;
+  if ((a == 'Fire' && b == 'Air') || (a == 'Air' && b == 'Fire')) return 79;
+  if ((a == 'Earth' && b == 'Water') || (a == 'Water' && b == 'Earth'))
+    return 80;
+  return 68;
+}
+
+class _KundliReport {
+  const _KundliReport({
+    required this.total,
+    required this.max,
+    required this.varna,
+    required this.vashya,
+    required this.tara,
+    required this.yoni,
+    required this.grahaMaitri,
+    required this.gana,
+    required this.bhakoot,
+    required this.nadi,
+    required this.nakshatraA,
+    required this.nakshatraB,
+    required this.rashiA,
+    required this.rashiB,
+    required this.summary,
+  });
+
+  final int total;
+  final int max;
+  final int varna;
+  final int vashya;
+  final int tara;
+  final int yoni;
+  final int grahaMaitri;
+  final int gana;
+  final int bhakoot;
+  final int nadi;
+  final String nakshatraA;
+  final String nakshatraB;
+  final String rashiA;
+  final String rashiB;
+  final String summary;
+}
+
+const List<String> _nakshatraNames = <String>[
+  'Ashwini',
+  'Bharani',
+  'Krittika',
+  'Rohini',
+  'Mrigashira',
+  'Ardra',
+  'Punarvasu',
+  'Pushya',
+  'Ashlesha',
+  'Magha',
+  'Purva Phalguni',
+  'Uttara Phalguni',
+  'Hasta',
+  'Chitra',
+  'Swati',
+  'Vishakha',
+  'Anuradha',
+  'Jyeshtha',
+  'Mula',
+  'Purva Ashadha',
+  'Uttara Ashadha',
+  'Shravana',
+  'Dhanishta',
+  'Shatabhisha',
+  'Purva Bhadrapada',
+  'Uttara Bhadrapada',
+  'Revati',
+];
+
+int _stableHash(String value) {
+  var hash = 0;
+  for (final unit in value.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7fffffff;
+  }
+  return hash;
+}
+
+int _nakshatraIndex(Map<String, dynamic> profile) {
+  final seed = [
+    profile['dob'] ?? profile['date_of_birth'] ?? '',
+    profile['birthTime'] ?? profile['birth_time'] ?? '',
+    profile['birthPlace'] ?? profile['birth_place'] ?? profile['city'] ?? '',
+  ].join('|');
+  return _stableHash(seed) % _nakshatraNames.length;
+}
+
+int _rashiIndex(String? sign) {
+  const signs = [
+    'Aries',
+    'Taurus',
+    'Gemini',
+    'Cancer',
+    'Leo',
+    'Virgo',
+    'Libra',
+    'Scorpio',
+    'Sagittarius',
+    'Capricorn',
+    'Aquarius',
+    'Pisces',
+  ];
+  final index = signs.indexOf(sign ?? '');
+  return index < 0 ? 0 : index;
+}
+
+int _closeScore(int distance, int max, {int modulo = 12}) {
+  final normalized = distance.abs() % modulo;
+  final closeness = modulo - normalized;
+  return ((closeness / modulo) * max).round().clamp(0, max);
+}
+
+_KundliReport? _kundliReport(
+  Map<String, dynamic> current,
+  Map<String, dynamic> match,
+) {
+  final signA = _zodiacSignFromDob(
+    (current['dob'] ?? current['date_of_birth'])?.toString(),
+  );
+  final signB = _zodiacSignFromDob(
+    (match['dob'] ?? match['date_of_birth'])?.toString(),
+  );
+  if (signA == null || signB == null) return null;
+  final nakA = _nakshatraIndex(current);
+  final nakB = _nakshatraIndex(match);
+  final rashiA = _rashiIndex(signA);
+  final rashiB = _rashiIndex(signB);
+  final nakDistance = (nakA - nakB).abs();
+  final rashiDistance = (rashiA - rashiB).abs();
+  final varna = signA == signB ? 1 : _closeScore(rashiDistance, 1);
+  final vashya = _closeScore(rashiDistance, 2);
+  final tara = _closeScore(nakDistance, 3, modulo: 27);
+  final yoni = _closeScore((_stableHash(signA) - _stableHash(signB)).abs(), 4);
+  final graha = _horoscopeScore(signA, signB) >= 79 ? 5 : 3;
+  final gana = _closeScore(nakDistance % 9, 6, modulo: 9);
+  final bhakoot = _closeScore(rashiDistance, 7);
+  final nadi = nakA % 3 == nakB % 3 ? 0 : 8;
+  final total = varna + vashya + tara + yoni + graha + gana + bhakoot + nadi;
+  final summary = total >= 28
+      ? 'Excellent Kundli compatibility with strong long-term harmony.'
+      : total >= 22
+      ? 'Good compatibility. Family review and conversation are recommended.'
+      : total >= 18
+      ? 'Average compatibility. Consider values, lifestyle, and family context carefully.'
+      : 'Low Kundli score. Proceed only after deeper discussion and expert guidance.';
+  return _KundliReport(
+    total: total,
+    max: 36,
+    varna: varna,
+    vashya: vashya,
+    tara: tara,
+    yoni: yoni,
+    grahaMaitri: graha,
+    gana: gana,
+    bhakoot: bhakoot,
+    nadi: nadi,
+    nakshatraA: _nakshatraNames[nakA],
+    nakshatraB: _nakshatraNames[nakB],
+    rashiA: signA,
+    rashiB: signB,
+    summary: summary,
+  );
 }
 
 bool _canViewAllPhotosFor(
@@ -476,10 +741,51 @@ List<String> _subCasteChoices(String? caste, String? selectedValue) {
 Map<String, dynamic> _normalizeUserPayload(Map<String, dynamic> raw) =>
     adapter.normalizeUserPayload(raw);
 
+Future<void> _saveCachedMap(String key, Map<String, dynamic> value) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(key, jsonEncode(value));
+}
+
+Future<void> _saveCachedList(String key, List<dynamic> value) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(key, jsonEncode(value));
+}
+
+Future<Map<String, dynamic>?> _readCachedMap(String key) async {
+  final prefs = await SharedPreferences.getInstance();
+  final raw = prefs.getString(key);
+  if (raw == null || raw.isEmpty) return null;
+  try {
+    return Map<String, dynamic>.from(jsonDecode(raw) as Map);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<List<dynamic>?> _readCachedList(String key) async {
+  final prefs = await SharedPreferences.getInstance();
+  final raw = prefs.getString(key);
+  if (raw == null || raw.isEmpty) return null;
+  try {
+    return List<dynamic>.from(jsonDecode(raw) as List);
+  } catch (_) {
+    return null;
+  }
+}
+
 Map<String, dynamic> _normalizeResponseMap(Map<String, dynamic> raw) =>
     adapter.normalizeResponseMap(raw);
 
 final Future<FirebaseApp> _firebaseInitFuture = Firebase.initializeApp();
+
+Future<void> _initializeAppServices() async {
+  try {
+    await _firebaseInitFuture;
+    await VSNotificationService.instance.initialize();
+  } catch (_) {
+    // App launch should not be blocked by background service startup.
+  }
+}
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -489,8 +795,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-  await _firebaseInitFuture;
-  await VSNotificationService.instance.initialize();
+  unawaited(_initializeAppServices());
   runApp(const VivaahSetuApp());
 }
 
@@ -599,6 +904,9 @@ class VSNotificationService {
     required String body,
     String payload = '',
   }) async {
+    if (!_initialized) {
+      await initialize();
+    }
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool('settings_push_notifications') == false) return;
     final now = DateTime.now();
@@ -620,6 +928,7 @@ class VSNotificationService {
         _channelId,
         _channelName,
         channelDescription: 'Messages, matches, offers, and connection alerts',
+        icon: 'ic_notification',
         importance: Importance.max,
         priority: Priority.max,
         playSound: true,
@@ -645,6 +954,7 @@ class VSNotificationService {
       _channelId,
       _channelName,
       channelDescription: 'Messages, matches, offers, and connection alerts',
+      icon: 'ic_notification',
       importance: Importance.max,
       priority: Priority.max,
       playSound: true,
@@ -1111,12 +1421,44 @@ class ApiClient {
     );
   }
 
-  Future<void> createNotificationDigest(String token) async {
-    await _request('POST', '/notifications/digest', token: token);
+  Future<Map<String, dynamic>> createNotificationDigest(String token) async {
+    final response = await _request(
+      'POST',
+      '/notifications/digest',
+      token: token,
+    );
+    return response is Map
+        ? Map<String, dynamic>.from(response)
+        : <String, dynamic>{};
   }
 
   Future<void> markNotificationsRead(String token) async {
     await _request('POST', '/notifications/read', token: token);
+  }
+
+  Future<void> submitFeedback(
+    String token, {
+    required String category,
+    required String message,
+    String subject = '',
+    String screen = '',
+  }) async {
+    final payload = {
+      'category': category,
+      'subject': subject,
+      'message': message,
+      'screen': screen,
+    };
+    try {
+      await _request('POST', '/feedback', token: token, data: payload);
+    } catch (_) {
+      await _request(
+        'POST',
+        category == 'bug' ? '/bug-report' : '/feedback/report',
+        token: token,
+        data: payload,
+      );
+    }
   }
 
   Future<int> unreadCount(String token) async {
@@ -1462,8 +1804,40 @@ class AppRoot extends StatefulWidget {
   State<AppRoot> createState() => _AppRootState();
 }
 
-class VSStartupSplash extends StatelessWidget {
+class VSStartupSplash extends StatefulWidget {
   const VSStartupSplash({super.key});
+
+  @override
+  State<VSStartupSplash> createState() => _VSStartupSplashState();
+}
+
+class _VSStartupSplashState extends State<VSStartupSplash>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scale;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    )..repeat(reverse: true);
+    _scale = Tween<double>(begin: 0.96, end: 1.05).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOutCubic),
+    );
+    _fade = Tween<double>(
+      begin: 0.78,
+      end: 1,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1506,24 +1880,38 @@ class VSStartupSplash extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Container(
-                    width: 172,
-                    height: 172,
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.90),
-                      borderRadius: BorderRadius.circular(42),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x2A5F0924),
-                          blurRadius: 42,
-                          offset: Offset(0, 18),
+                  FadeTransition(
+                    opacity: _fade,
+                    child: ScaleTransition(
+                      scale: _scale,
+                      child: Container(
+                        width: 188,
+                        height: 188,
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Colors.white, Color(0xFFFFF4DC)],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.circular(52),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.80),
+                            width: 2,
+                          ),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Color(0x365F0924),
+                              blurRadius: 48,
+                              offset: Offset(0, 20),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Image.asset(
-                      'assets/images/logo.png',
-                      fit: BoxFit.contain,
+                        child: Image.asset(
+                          'assets/images/logo.png',
+                          fit: BoxFit.contain,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 22),
@@ -1566,12 +1954,10 @@ class VSStartupSplash extends StatelessWidget {
 
 class _AppRootState extends State<AppRoot> {
   bool _loading = true;
-  bool _showStartupSplash = true;
   String? _token;
   Map<String, dynamic>? _user;
   bool _termsAccepted = false;
   bool _logoutInProgress = false;
-  Timer? _startupSplashTimer;
   late final ApiClient _api;
 
   bool _needsProfileCompletion(Map<String, dynamic> user) {
@@ -1618,17 +2004,7 @@ class _AppRootState extends State<AppRoot> {
       onUnauthorized: _logout,
       onSessionRefresh: _refreshSessionFromFirebase,
     );
-    _startupSplashTimer = Timer(const Duration(milliseconds: 1800), () {
-      if (!mounted) return;
-      setState(() => _showStartupSplash = false);
-    });
     _load();
-  }
-
-  @override
-  void dispose() {
-    _startupSplashTimer?.cancel();
-    super.dispose();
   }
 
   String? _extractToken(Map<String, dynamic> payload) {
@@ -1788,7 +2164,7 @@ class _AppRootState extends State<AppRoot> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || _showStartupSplash) {
+    if (_loading) {
       return const VSStartupSplash();
     }
     if (_token == null || _user == null) {
@@ -2134,35 +2510,50 @@ class ShellPage extends StatefulWidget {
   State<ShellPage> createState() => _ShellPageState();
 }
 
-class _ShellPageState extends State<ShellPage> {
+class _ShellPageState extends State<ShellPage> with WidgetsBindingObserver {
+  final GlobalKey<ScaffoldState> _shellKey = GlobalKey<ScaffoldState>();
   int _index = 0;
   int _chatUnreadCount = 0;
+  int _notificationUnreadCount = 0;
   int _realtimeRevision = 0;
   late Map<String, dynamic> _currentUser;
   Timer? _unreadPollTimer;
+  Timer? _notificationPollTimer;
   Timer? _reconnectTimer;
   StreamSubscription<String>? _notificationTapSub;
   StreamSubscription<Uri>? _deepLinkSub;
   WebSocket? _realtimeSocket;
   bool _shouldReconnect = true;
+  bool _notificationPollSeeded = false;
+  final Set<String> _seenNotificationIds = <String>{};
   String? _pendingChatPartnerId;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentUser = _normalizeUserPayload(widget.user);
     unawaited(_refreshUnreadCount());
     _unreadPollTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => unawaited(_refreshUnreadCount()),
     );
+    _notificationPollTimer = Timer.periodic(
+      const Duration(seconds: 15),
+      (_) => unawaited(_refreshNotificationUnreadCount()),
+    );
     _notificationTapSub = VSNotificationService.instance.taps.listen(
       _handleNotificationPayload,
     );
     unawaited(_listenForPaymentLinks());
     unawaited(_connectRealtimeSocket());
-    unawaited(_registerPushToken());
-    unawaited(_showDailyRecommendationIfNeeded());
+    unawaited(_initializeNotificationsForSession());
+  }
+
+  Future<void> _initializeNotificationsForSession() async {
+    await _refreshNotificationUnreadCount(seedOnly: true);
+    await _registerPushToken();
+    await _showDailyRecommendationIfNeeded();
   }
 
   @override
@@ -2186,13 +2577,24 @@ class _ShellPageState extends State<ShellPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _shouldReconnect = false;
     _unreadPollTimer?.cancel();
+    _notificationPollTimer?.cancel();
     _reconnectTimer?.cancel();
     _notificationTapSub?.cancel();
     _deepLinkSub?.cancel();
     _realtimeSocket?.close(WebSocketStatus.normalClosure);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshUnreadCount());
+      unawaited(_refreshNotificationUnreadCount());
+      unawaited(_registerPushToken());
+    }
   }
 
   Future<void> _listenForPaymentLinks() async {
@@ -2265,14 +2667,14 @@ class _ShellPageState extends State<ShellPage> {
       final partnerId = payload.substring('chat:'.length).trim();
       setState(() {
         _pendingChatPartnerId = partnerId.isEmpty ? null : partnerId;
-        _index = 2;
+        _index = 3;
         _chatUnreadCount = 0;
       });
       return;
     }
     if (payload == 'connections') {
       setState(() {
-        _index = 1;
+        _index = 2;
       });
       return;
     }
@@ -2311,9 +2713,21 @@ class _ShellPageState extends State<ShellPage> {
       }
       return;
     }
-    if (payload == 'matches' || payload == 'notifications') {
+    if (payload == 'notifications') {
+      unawaited(_refreshNotificationUnreadCount());
+      Navigator.of(context)
+          .push(
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  NotificationsPage(api: widget.api, token: widget.token),
+            ),
+          )
+          .then((_) => _refreshNotificationUnreadCount());
+      return;
+    }
+    if (payload == 'matches') {
       setState(() {
-        _index = 0;
+        _index = 1;
       });
       return;
     }
@@ -2330,12 +2744,23 @@ class _ShellPageState extends State<ShellPage> {
       if (prefs.getString('daily_recommendation_notified_on') == today) {
         return;
       }
-      await prefs.setString('daily_recommendation_notified_on', today);
       await Future<void>.delayed(const Duration(seconds: 3));
       if (!mounted) return;
-      // The backend stores the digest and emits the actual push/realtime event.
-      // Avoid a second local notification for the same daily reminder.
-      unawaited(widget.api.createNotificationDigest(widget.token));
+      final digest = await widget.api.createNotificationDigest(widget.token);
+      await prefs.setString('daily_recommendation_notified_on', today);
+      await _refreshNotificationUnreadCount();
+      final created = (digest['created'] as num?)?.toInt() ?? 0;
+      if (created > 0) {
+        unawaited(
+          _showLocalNotification(
+            title: 'VivaahSetu update',
+            body: created == 1
+                ? 'You have a new matrimonial update.'
+                : '$created new matrimonial updates are waiting.',
+            payload: 'notifications',
+          ),
+        );
+      }
     } catch (_) {
       // Recommendation notifications should never block app startup.
     }
@@ -2408,6 +2833,9 @@ class _ShellPageState extends State<ShellPage> {
     final data = _asMap(decoded);
     final type = data['type']?.toString() ?? '';
     if (type == 'notifications_read') {
+      if (mounted) {
+        setState(() => _notificationUnreadCount = 0);
+      }
       return;
     }
     final unread = data['unreadCount'] ?? data['unread_count'];
@@ -2420,7 +2848,7 @@ class _ShellPageState extends State<ShellPage> {
       final senderId = (message['sender_id'] ?? message['senderId'] ?? '')
           .toString();
       final content = message['content']?.toString().trim() ?? '';
-      if (senderId.isNotEmpty && senderId != myId && _index != 2) {
+      if (senderId.isNotEmpty && senderId != myId && _index != 3) {
         unawaited(
           _showLocalNotification(
             title: 'New message on VivaahSetu',
@@ -2433,6 +2861,9 @@ class _ShellPageState extends State<ShellPage> {
       }
     } else if (type == 'notification_created') {
       final notification = _asMap(data['notification']);
+      if (mounted) {
+        setState(() => _notificationUnreadCount += 1);
+      }
       final message = notification['message']?.toString().trim() ?? '';
       final notificationType =
           notification['type']?.toString().toLowerCase() ?? '';
@@ -2488,11 +2919,89 @@ class _ShellPageState extends State<ShellPage> {
     }
   }
 
+  Future<void> _refreshNotificationUnreadCount({bool seedOnly = false}) async {
+    try {
+      final notifications = await widget.api.notifications(widget.token);
+      if (!mounted) return;
+      final unread = notifications
+          .map((item) => _asMap(item))
+          .where((item) => item['read'] != true)
+          .toList();
+      final currentIds = unread.map(_notificationIdentity).toSet();
+      if (!_notificationPollSeeded || seedOnly) {
+        _seenNotificationIds
+          ..clear()
+          ..addAll(currentIds);
+        _notificationPollSeeded = true;
+      } else {
+        for (final item in unread) {
+          final id = _notificationIdentity(item);
+          if (_seenNotificationIds.contains(id)) continue;
+          _seenNotificationIds.add(id);
+          final message = item['message']?.toString().trim() ?? '';
+          unawaited(
+            _showLocalNotification(
+              title: _notificationTitle(item),
+              body: message.isEmpty ? 'You have a new notification.' : message,
+              payload: _notificationPayload(item),
+            ),
+          );
+        }
+        _seenNotificationIds.removeWhere((id) => !currentIds.contains(id));
+      }
+      setState(() {
+        _notificationUnreadCount = unread.length;
+      });
+    } catch (_) {
+      // Keep last known notification count on transient failures.
+    }
+  }
+
+  String _notificationIdentity(Map<String, dynamic> item) {
+    final id = (item['id'] ?? item['_id'])?.toString() ?? '';
+    if (id.isNotEmpty) return id;
+    return '${item['type']}_${item['createdAt']}_${item['message']}';
+  }
+
+  String _notificationTitle(Map<String, dynamic> item) {
+    final type = item['type']?.toString().toLowerCase() ?? '';
+    if (type.contains('message') || type.contains('chat')) {
+      return 'New message on VivaahSetu';
+    }
+    if (type.contains('connection')) return 'Connection update';
+    if (type.contains('extension')) return 'Extension request update';
+    if (type.contains('visitor')) return 'Profile viewed';
+    if (type.contains('match') || type.contains('recommend')) {
+      return 'New matches today';
+    }
+    return 'VivaahSetu update';
+  }
+
+  String _notificationPayload(Map<String, dynamic> item) {
+    final type = item['type']?.toString().toLowerCase() ?? '';
+    if (type.contains('chat') || type.contains('message')) {
+      final sender = (item['senderId'] ?? item['sender_id'] ?? '').toString();
+      return sender.isEmpty ? 'notifications' : 'chat:$sender';
+    }
+    if (type.contains('connection') || type.contains('extension')) {
+      return 'connections';
+    }
+    if (type.contains('visitor')) {
+      final sender = (item['fromUserId'] ?? item['from_user_id'] ?? '')
+          .toString();
+      return sender.isEmpty ? 'notifications' : 'profile:$sender';
+    }
+    if (type.contains('match') || type.contains('recommend')) {
+      return 'matches';
+    }
+    return 'notifications';
+  }
+
   void _goToTab(int index) {
     if (_index == index) return;
     setState(() {
       _index = index;
-      if (index == 2) {
+      if (index == 3) {
         _chatUnreadCount = 0;
       }
     });
@@ -2506,11 +3015,20 @@ class _ShellPageState extends State<ShellPage> {
         api: widget.api,
         token: widget.token,
         user: _currentUser,
+        unreadNotifications: _notificationUnreadCount,
         onNavigate: _goToTab,
         onNotificationPayload: _handleNotificationPayload,
         onUserChanged: _syncUser,
         realtimeRevision: _realtimeRevision,
         active: _index == 0,
+        onOpenMenu: () => _shellKey.currentState?.openDrawer(),
+      ),
+      BrowseTab(
+        key: const ValueKey('matches'),
+        api: widget.api,
+        token: widget.token,
+        user: _currentUser,
+        active: _index == 1,
       ),
       ConnectionsTab(
         key: const ValueKey('connections'),
@@ -2518,7 +3036,7 @@ class _ShellPageState extends State<ShellPage> {
         token: widget.token,
         user: _currentUser,
         realtimeRevision: _realtimeRevision,
-        active: _index == 1,
+        active: _index == 2,
       ),
       MessagesTab(
         key: const ValueKey('messages'),
@@ -2526,23 +3044,23 @@ class _ShellPageState extends State<ShellPage> {
         token: widget.token,
         user: _currentUser,
         realtimeRevision: _realtimeRevision,
-        active: _index == 2,
+        active: _index == 3,
         initialPartnerId: _pendingChatPartnerId,
         onInitialPartnerConsumed: () {
           if (!mounted) return;
           _pendingChatPartnerId = null;
         },
       ),
-      ProfileTab(
-        key: const ValueKey('profile'),
+    ];
+    return Scaffold(
+      key: _shellKey,
+      drawer: _ProfileDrawer(
         api: widget.api,
         token: widget.token,
         user: _currentUser,
         onUserChanged: _syncUser,
         onLogout: widget.onLogout,
       ),
-    ];
-    return Scaffold(
       body: IndexedStack(index: _index, children: pages),
       bottomNavigationBar: SafeArea(
         top: false,
@@ -2570,22 +3088,22 @@ class _ShellPageState extends State<ShellPage> {
                 onTap: () => _goToTab(0),
               ),
               _BottomNavItem(
-                label: 'Connect',
-                icon: Icons.people_alt_rounded,
+                label: 'Matches',
+                icon: Icons.favorite_rounded,
                 selected: _index == 1,
                 onTap: () => _goToTab(1),
               ),
               _BottomNavItem(
-                label: 'Chats',
-                icon: Icons.chat_bubble_rounded,
+                label: 'Connect',
+                icon: Icons.people_alt_rounded,
                 selected: _index == 2,
-                badgeCount: _chatUnreadCount,
                 onTap: () => _goToTab(2),
               ),
               _BottomNavItem(
-                label: 'Profile',
-                icon: Icons.person_rounded,
+                label: 'Chats',
+                icon: Icons.chat_bubble_rounded,
                 selected: _index == 3,
+                badgeCount: _chatUnreadCount,
                 onTap: () => _goToTab(3),
               ),
             ],
@@ -2596,27 +3114,437 @@ class _ShellPageState extends State<ShellPage> {
   }
 }
 
+class _ProfileDrawer extends StatelessWidget {
+  const _ProfileDrawer({
+    required this.api,
+    required this.token,
+    required this.user,
+    required this.onUserChanged,
+    required this.onLogout,
+  });
+
+  final ApiClient api;
+  final String token;
+  final Map<String, dynamic> user;
+  final Future<void> Function(Map<String, dynamic>) onUserChanged;
+  final Future<void> Function() onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = user['name']?.toString().trim().isNotEmpty == true
+        ? user['name'].toString()
+        : 'VivaahSetu Member';
+    final plan = (user['plan'] ?? 'free').toString();
+    return Drawer(
+      backgroundColor: VSColors.ivory,
+      child: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                gradient: VSGradients.matrimonialHero,
+                borderRadius: BorderRadius.circular(26),
+              ),
+              child: Row(
+                children: [
+                  _CircularProfileAvatar(
+                    profile: user,
+                    size: 62,
+                    borderColor: Colors.white,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${plan.substring(0, 1).toUpperCase()}${plan.substring(1).toLowerCase()} plan',
+                          style: const TextStyle(
+                            color: Color(0xFFFFE8EE),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  _DrawerActionTile(
+                    icon: Icons.edit_note_rounded,
+                    label: 'Edit Profile',
+                    subtitle: 'Photos, birth details, preferences',
+                    onTap: () => _open(
+                      context,
+                      EditProfilePage(
+                        api: api,
+                        token: token,
+                        initialProfile: user,
+                        onProfileSaved: onUserChanged,
+                      ),
+                    ),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.notifications_active_rounded,
+                    label: 'Notifications',
+                    subtitle: 'Matches, visitors, connection alerts',
+                    onTap: () => _open(
+                      context,
+                      NotificationsPage(api: api, token: token),
+                    ),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.settings_rounded,
+                    label: 'Settings',
+                    subtitle: 'Privacy and notification controls',
+                    onTap: () =>
+                        _open(context, SettingsPage(api: api, token: token)),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.workspace_premium_rounded,
+                    label: 'Subscription',
+                    subtitle: 'Plans and premium benefits',
+                    onTap: () => _open(
+                      context,
+                      ReactSubscriptionPage(
+                        api: api,
+                        token: token,
+                        currentPlan: user['plan']?.toString() ?? 'free',
+                      ),
+                    ),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.help_rounded,
+                    label: 'Help & Support',
+                    subtitle: 'Safety, support and guidance',
+                    onTap: () => _open(context, const HelpSupportPage()),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.rate_review_rounded,
+                    label: 'Feedback',
+                    subtitle: 'Tell us what to improve',
+                    onTap: () => _open(
+                      context,
+                      FeedbackReportPage(
+                        api: api,
+                        token: token,
+                        category: 'feedback',
+                      ),
+                    ),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.bug_report_rounded,
+                    label: 'Bug Report',
+                    subtitle: 'Report something broken',
+                    onTap: () => _open(
+                      context,
+                      FeedbackReportPage(
+                        api: api,
+                        token: token,
+                        category: 'bug',
+                      ),
+                    ),
+                  ),
+                  _DrawerActionTile(
+                    icon: Icons.info_rounded,
+                    label: 'About',
+                    subtitle: 'Version and company details',
+                    onTap: () => _open(context, const AboutPage()),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.logout_rounded, color: Colors.red),
+              title: const Text('Logout'),
+              onTap: () async {
+                Navigator.of(context).pop();
+                await onLogout();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _open(BuildContext context, Widget page) {
+    Navigator.of(context).pop();
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
+  }
+}
+
+class _DrawerActionTile extends StatelessWidget {
+  const _DrawerActionTile({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          color: _primaryColor.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Icon(icon, color: _primaryColor, size: 21),
+      ),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w800)),
+      subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing: const Icon(Icons.chevron_right_rounded),
+      onTap: onTap,
+    );
+  }
+}
+
+class _HoroscopePill extends StatelessWidget {
+  const _HoroscopePill({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: VSColors.border),
+      ),
+      child: RichText(
+        text: TextSpan(
+          style: const TextStyle(color: _textSecondaryColor, fontSize: 12),
+          children: [
+            TextSpan(text: '$label: '),
+            TextSpan(
+              text: value,
+              style: const TextStyle(
+                color: _textColor,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _KundliCompatibilityCard extends StatelessWidget {
+  const _KundliCompatibilityCard({
+    required this.currentUser,
+    required this.match,
+    this.compact = false,
+  });
+
+  final Map<String, dynamic> currentUser;
+  final Map<String, dynamic> match;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_isPaidUser(currentUser)) {
+      return VSGatedContentCard(
+        title: 'Unlock Kundli matching',
+        subtitle:
+            'Paid members can see 36-gun compatibility, Nadi, Bhakoot, Gana, Yoni and Rashi insights for every match.',
+      );
+    }
+    final report = _kundliReport(currentUser, match);
+    if (report == null) {
+      return const VSGatedContentCard(
+        title: 'Kundli details incomplete',
+        subtitle:
+            'Add DOB, birth time, and birth place in both profiles to calculate horoscope compatibility.',
+      );
+    }
+    return Container(
+      padding: EdgeInsets.all(compact ? 12 : 18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFFBF1), Color(0xFFFFE7EF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(compact ? 18 : 24),
+        border: Border.all(color: VSColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: compact ? 34 : 44,
+                height: compact ? 34 : 44,
+                decoration: BoxDecoration(
+                  gradient: VSGradients.matrimonialHero,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.auto_awesome_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  compact
+                      ? 'Kundli ${report.total}/36'
+                      : 'Kundli Match: ${report.total}/36 Gun',
+                  style: TextStyle(
+                    color: _textColor,
+                    fontSize: compact ? 14 : 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            report.summary,
+            maxLines: compact ? 2 : null,
+            overflow: compact ? TextOverflow.ellipsis : null,
+            style: const TextStyle(
+              color: _textSecondaryColor,
+              fontSize: 12,
+              height: 1.4,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          if (!compact) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _HoroscopePill(label: 'Your Rashi', value: report.rashiA),
+                _HoroscopePill(label: 'Match Rashi', value: report.rashiB),
+                _HoroscopePill(
+                  label: 'Your Nakshatra',
+                  value: report.nakshatraA,
+                ),
+                _HoroscopePill(
+                  label: 'Match Nakshatra',
+                  value: report.nakshatraB,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _GunRows(report: report),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _GunRows extends StatelessWidget {
+  const _GunRows({required this.report});
+
+  final _KundliReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = <(String, int, int)>[
+      ('Varna', report.varna, 1),
+      ('Vashya', report.vashya, 2),
+      ('Tara', report.tara, 3),
+      ('Yoni', report.yoni, 4),
+      ('Graha Maitri', report.grahaMaitri, 5),
+      ('Gana', report.gana, 6),
+      ('Bhakoot', report.bhakoot, 7),
+      ('Nadi', report.nadi, 8),
+    ];
+    return Column(
+      children: rows
+          .map(
+            (row) => Padding(
+              padding: const EdgeInsets.only(bottom: 7),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      row.$1,
+                      style: const TextStyle(
+                        color: _textColor,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '${row.$2}/${row.$3}',
+                    style: const TextStyle(
+                      color: _primaryColor,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+          .toList(),
+    );
+  }
+}
+
 class HomeTab extends StatefulWidget {
   const HomeTab({
     super.key,
     required this.api,
     required this.token,
     required this.user,
+    required this.unreadNotifications,
     required this.onNavigate,
     required this.onNotificationPayload,
     required this.onUserChanged,
     required this.realtimeRevision,
     required this.active,
+    required this.onOpenMenu,
   });
 
   final ApiClient api;
   final String token;
   final Map<String, dynamic> user;
+  final int unreadNotifications;
   final void Function(int index) onNavigate;
   final void Function(String payload) onNotificationPayload;
   final Future<void> Function(Map<String, dynamic>) onUserChanged;
   final int realtimeRevision;
   final bool active;
+  final VoidCallback onOpenMenu;
 
   @override
   State<HomeTab> createState() => _HomeTabState();
@@ -2630,6 +3558,8 @@ class _HomeTabState extends State<HomeTab> {
   int _unreadNotifications = 0;
   List<dynamic> _previewMatches = <dynamic>[];
   Timer? _refreshTimer;
+  String get _cacheScope =>
+      'home:${widget.user['id']?.toString() ?? widget.user['email']?.toString() ?? 'guest'}';
 
   @override
   void initState() {
@@ -2655,6 +3585,8 @@ class _HomeTabState extends State<HomeTab> {
       'max': 5,
     };
     _loading = false;
+    _unreadNotifications = widget.unreadNotifications;
+    unawaited(_hydrateCachedData());
     _load(silent: true);
     _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (widget.active) _load(silent: true);
@@ -2667,6 +3599,10 @@ class _HomeTabState extends State<HomeTab> {
     if (oldWidget.realtimeRevision != widget.realtimeRevision) {
       unawaited(_load(silent: true));
     }
+    if (oldWidget.unreadNotifications != widget.unreadNotifications &&
+        mounted) {
+      setState(() => _unreadNotifications = widget.unreadNotifications);
+    }
     if (!oldWidget.active && widget.active) {
       unawaited(_load(silent: true));
     }
@@ -2676,6 +3612,20 @@ class _HomeTabState extends State<HomeTab> {
   void dispose() {
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _hydrateCachedData() async {
+    final cachedConnections = await _readCachedMap('$_cacheScope:connections');
+    final cachedMatches = await _readCachedList('$_cacheScope:preview_matches');
+    if (!mounted) return;
+    setState(() {
+      if (cachedConnections != null) {
+        _connections = cachedConnections;
+      }
+      if (cachedMatches != null && cachedMatches.isNotEmpty) {
+        _previewMatches = cachedMatches;
+      }
+    });
   }
 
   Map<String, dynamic> _partnerFilters(Map<String, dynamic> profile) {
@@ -2705,17 +3655,7 @@ class _HomeTabState extends State<HomeTab> {
   }
 
   Future<void> _openBrowse() async {
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => BrowseTab(
-          api: widget.api,
-          token: widget.token,
-          user: _profile ?? widget.user,
-          initialFilters: _partnerFilters(_profile ?? widget.user),
-          showBackButton: true,
-        ),
-      ),
-    );
+    widget.onNavigate(1);
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -2737,9 +3677,6 @@ class _HomeTabState extends State<HomeTab> {
     final profileFuture = safe(() => widget.api.me(widget.token));
     final connectionsFuture = safe(() => widget.api.connections(widget.token));
     final unreadFuture = safe(() => widget.api.unreadCount(widget.token));
-    final notificationsFuture = safe(
-      () => widget.api.notifications(widget.token),
-    );
     final previewMatchesFuture = safe(
       () => widget.api.matches(widget.token, _partnerFilters(seedProfile)),
     );
@@ -2757,35 +3694,33 @@ class _HomeTabState extends State<HomeTab> {
       }
       if (!silent || firstPaintLoad) _loading = false;
     });
+    if (_connections != null) {
+      unawaited(_saveCachedMap('$_cacheScope:connections', _connections!));
+    }
 
-    final details = await Future.wait([
-      profileFuture,
-      notificationsFuture,
-      previewMatchesFuture,
-    ]);
+    final details = await Future.wait([profileFuture, previewMatchesFuture]);
     if (!mounted) return;
 
     final profileResult = details[0];
-    final notifications = List<dynamic>.from(
-      details[1] as List? ?? <dynamic>[],
-    );
-    final unreadNotifications = notifications
-        .where((item) => _asMap(item)['read'] != true)
-        .length;
-    final previewPayload = _asMap(details[2]);
+    final previewPayload = _asMap(details[1]);
 
     setState(() {
       if (profileResult != null) {
         _profile = _asMap(profileResult);
       }
       if (!silent || firstPaintLoad) _loading = false;
-      _unreadNotifications = unreadNotifications;
+      _unreadNotifications = widget.unreadNotifications;
       if (previewPayload.containsKey('matches')) {
         _previewMatches = List<dynamic>.from(
           previewPayload['matches'] as List? ?? <dynamic>[],
         );
       }
     });
+    if (_previewMatches.isNotEmpty) {
+      unawaited(
+        _saveCachedList('$_cacheScope:preview_matches', _previewMatches),
+      );
+    }
 
     final latestProfile = _profile;
     if (latestProfile != null) {
@@ -2809,6 +3744,11 @@ class _HomeTabState extends State<HomeTab> {
           map['matches'] as List? ?? <dynamic>[],
         );
       });
+      if (_previewMatches.isNotEmpty) {
+        unawaited(
+          _saveCachedList('$_cacheScope:preview_matches', _previewMatches),
+        );
+      }
     } catch (_) {
       // Keep existing match preview on transient failures.
     }
@@ -2936,6 +3876,14 @@ class _HomeTabState extends State<HomeTab> {
                         children: [
                           Row(
                             children: [
+                              IconButton(
+                                onPressed: widget.onOpenMenu,
+                                icon: const Icon(
+                                  Icons.menu_rounded,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -3208,21 +4156,21 @@ class _HomeTabState extends State<HomeTab> {
                     value: '$count/$max',
                     label: 'Active Connections',
                     color: _primaryColor,
-                    onTap: () => widget.onNavigate(1),
+                    onTap: () => widget.onNavigate(2),
                   ),
                   _HomeMetricCard(
                     icon: Icons.mark_email_unread_outlined,
                     value: '$receivedCount',
                     label: 'Requests Received',
                     color: const Color(0xFF3566D6),
-                    onTap: () => widget.onNavigate(1),
+                    onTap: () => widget.onNavigate(2),
                   ),
                   _HomeMetricCard(
                     icon: Icons.chat_bubble_outline_rounded,
                     value: '$_unreadChats',
                     label: 'Unread Chats',
                     color: const Color(0xFF2C9A65),
-                    onTap: () => widget.onNavigate(2),
+                    onTap: () => widget.onNavigate(3),
                   ),
                   _HomeMetricCard(
                     icon: Icons.notifications_active_outlined,
@@ -3431,64 +4379,66 @@ class _HomeTabState extends State<HomeTab> {
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
-              GestureDetector(
-                onTap: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute<void>(
-                      builder: (_) => ReactSubscriptionPage(
-                        api: widget.api,
-                        token: widget.token,
-                        currentPlan: planRaw,
-                      ),
-                    ),
-                  );
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    gradient: VSGradients.matrimonialHero,
-                    borderRadius: BorderRadius.circular(24),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x269B1233),
-                        blurRadius: 22,
-                        offset: Offset(0, 12),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Upgrade to Premium',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
-                            ),
-                            SizedBox(height: 4),
-                            Text(
-                              sentCount > 0
-                                  ? 'You have $sentCount request${sentCount > 1 ? 's' : ''} waiting for response'
-                                  : 'Unlock chat, contacts, and more!',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ],
+              if (!_isPaidUser(profileForUi)) ...[
+                const SizedBox(height: 24),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => ReactSubscriptionPage(
+                          api: widget.api,
+                          token: widget.token,
+                          currentPlan: planRaw,
                         ),
                       ),
-                      Icon(Icons.arrow_forward, color: Colors.white),
-                    ],
+                    );
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      gradient: VSGradients.matrimonialHero,
+                      borderRadius: BorderRadius.circular(24),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x269B1233),
+                          blurRadius: 22,
+                          offset: Offset(0, 12),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Upgrade to Premium',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                sentCount > 0
+                                    ? 'You have $sentCount request${sentCount > 1 ? 's' : ''} waiting for response'
+                                    : 'Unlock chat, contacts, and more!',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.arrow_forward, color: Colors.white),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -3505,6 +4455,7 @@ class BrowseTab extends StatefulWidget {
     required this.user,
     this.initialFilters,
     this.showBackButton = false,
+    this.active = true,
   });
 
   final ApiClient api;
@@ -3512,9 +4463,62 @@ class BrowseTab extends StatefulWidget {
   final Map<String, dynamic> user;
   final Map<String, dynamic>? initialFilters;
   final bool showBackButton;
+  final bool active;
 
   @override
   State<BrowseTab> createState() => _BrowseTabState();
+}
+
+class _MatchHeroStat extends StatelessWidget {
+  const _MatchHeroStat({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: Colors.white, size: 17),
+          const SizedBox(width: 7),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Color(0xFFFFE8EE),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _BrowseTabState extends State<BrowseTab> {
@@ -3541,20 +4545,31 @@ class _BrowseTabState extends State<BrowseTab> {
   String? _selectedIncome;
   String? _selectedDiet;
   String? _selectedManglik;
+  String? _selectedProfileManagedBy;
   List<String> _availableCastes = const <String>[];
   List<dynamic> _matches = <dynamic>[];
   String _browseMode = 'matches';
   Timer? _refreshTimer;
+  String get _cacheScope =>
+      'browse:${widget.user['id']?.toString() ?? widget.user['email']?.toString() ?? 'guest'}';
 
   @override
   void initState() {
     super.initState();
     _seedFiltersFromPreferences();
+    unawaited(_hydrateCachedMatches());
     unawaited(_load());
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _load(silent: true),
-    );
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (widget.active) _load(silent: true);
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant BrowseTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.active && widget.active) {
+      unawaited(_load(silent: true));
+    }
   }
 
   @override
@@ -3611,6 +4626,15 @@ class _BrowseTabState extends State<BrowseTab> {
         _loadCasteOptions(_selectedReligion!, selectedValue: _selectedCaste),
       );
     }
+  }
+
+  Future<void> _hydrateCachedMatches() async {
+    final cached = await _readCachedList('$_cacheScope:matches');
+    if (!mounted || cached == null || cached.isEmpty) return;
+    setState(() {
+      _matches = cached;
+      _loading = false;
+    });
   }
 
   Map<String, dynamic> _partnerFiltersFromUser(Map<String, dynamic> user) {
@@ -3692,8 +4716,32 @@ class _BrowseTabState extends State<BrowseTab> {
         filters['diet'] = _selectedDiet!.trim();
       if (_selectedManglik?.trim().isNotEmpty == true)
         filters['manglik'] = _selectedManglik!.trim();
+      if (_selectedProfileManagedBy?.trim().isNotEmpty == true) {
+        filters['profileManagedBy'] = _selectedProfileManagedBy!.trim();
+        filters['profile_managed_by'] = _selectedProfileManagedBy!.trim();
+      }
       final data = await widget.api.matches(widget.token, filters);
       var matches = List<dynamic>.from(data['matches'] as List? ?? <dynamic>[]);
+      final mySign = _zodiacSignFromDob(
+        (widget.user['dob'] ?? widget.user['date_of_birth'])?.toString(),
+      );
+      matches.sort((a, b) {
+        final left = _asMap(a);
+        final right = _asMap(b);
+        final leftScore = _horoscopeScore(
+          mySign,
+          _zodiacSignFromDob(
+            (left['dob'] ?? left['date_of_birth'])?.toString(),
+          ),
+        );
+        final rightScore = _horoscopeScore(
+          mySign,
+          _zodiacSignFromDob(
+            (right['dob'] ?? right['date_of_birth'])?.toString(),
+          ),
+        );
+        return rightScore.compareTo(leftScore);
+      });
       if (_browseMode == 'new') {
         final cutoff = DateTime.now().subtract(const Duration(days: 30));
         matches = matches.where((item) {
@@ -3706,6 +4754,9 @@ class _BrowseTabState extends State<BrowseTab> {
       }
       if (!mounted) return;
       setState(() => _matches = matches);
+      if (_matches.isNotEmpty) {
+        unawaited(_saveCachedList('$_cacheScope:matches', _matches));
+      }
     } catch (e) {
       if (!silent && mounted) {
         ScaffoldMessenger.of(
@@ -3821,6 +4872,340 @@ class _BrowseTabState extends State<BrowseTab> {
     return daysLeft < 15;
   }
 
+  void _openFilterPanel() {
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close filters',
+      barrierColor: Colors.black.withValues(alpha: 0.28),
+      transitionDuration: const Duration(milliseconds: 260),
+      pageBuilder: (dialogContext, animation, secondaryAnimation) {
+        return Align(
+          alignment: Alignment.centerRight,
+          child: Material(
+            color: Colors.transparent,
+            child: SafeArea(
+              child: Container(
+                width: MediaQuery.of(context).size.width.clamp(320.0, 420.0),
+                height: double.infinity,
+                margin: const EdgeInsets.only(left: 24),
+                decoration: const BoxDecoration(
+                  color: VSColors.ivory,
+                  borderRadius: BorderRadius.horizontal(
+                    left: Radius.circular(30),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0x33000000),
+                      blurRadius: 30,
+                      offset: Offset(-12, 0),
+                    ),
+                  ],
+                ),
+                child: StatefulBuilder(
+                  builder: (context, setPanelState) {
+                    void update(VoidCallback action) {
+                      setState(action);
+                      setPanelState(() {});
+                    }
+
+                    return ListView(
+                      padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                'Match Filters',
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w900,
+                                  color: _textColor,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(),
+                              icon: const Icon(Icons.close_rounded),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _FilterField(
+                                label: 'Age Min',
+                                controller: _minAge,
+                                hint: '20',
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _FilterField(
+                                label: 'Age Max',
+                                controller: _maxAge,
+                                hint: '35',
+                                keyboardType: TextInputType.number,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'City/State',
+                          value: _selectedCity,
+                          options: _mergeDropdownOptions(
+                            _stateOptions,
+                            _selectedCity,
+                          ),
+                          hint: 'Select state',
+                          onChanged: (value) => update(() {
+                            _selectedCity = value;
+                            _city.text = value ?? '';
+                          }),
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Religion',
+                          value: _selectedReligion,
+                          options: _mergeDropdownOptions(
+                            _religionOptions,
+                            _selectedReligion,
+                          ),
+                          hint: 'Select religion',
+                          onChanged: (value) {
+                            update(() {
+                              _selectedReligion = value;
+                              _religion.text = value ?? '';
+                              _selectedCaste = null;
+                              _caste.clear();
+                            });
+                            unawaited(_loadCasteOptions(value ?? ''));
+                          },
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Caste',
+                          value: _selectedCaste,
+                          options: _mergeDropdownOptions(
+                            _availableCastes,
+                            _selectedCaste,
+                          ),
+                          hint: _selectedReligion == null
+                              ? 'Select religion first'
+                              : 'Select caste',
+                          onChanged: (value) => update(() {
+                            _selectedCaste = value;
+                            _caste.text = value ?? '';
+                          }),
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Profession',
+                          value: _selectedProfession,
+                          options: _mergeDropdownOptions(
+                            _professionOptions,
+                            _selectedProfession,
+                          ),
+                          hint: 'Profession',
+                          onChanged: (value) => update(() {
+                            _selectedProfession = value;
+                            _profession.text = value ?? '';
+                          }),
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Education',
+                          value: _selectedEducation,
+                          options: _mergeDropdownOptions(
+                            _educationOptions,
+                            _selectedEducation,
+                          ),
+                          hint: 'Education',
+                          onChanged: (value) =>
+                              update(() => _selectedEducation = value),
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Marital Status',
+                          value: _selectedMaritalStatus,
+                          options: _mergeDropdownOptions(
+                            _maritalStatusOptions,
+                            _selectedMaritalStatus,
+                          ),
+                          hint: 'Marital status',
+                          onChanged: (value) =>
+                              update(() => _selectedMaritalStatus = value),
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Mother Tongue',
+                          value: _selectedMotherTongue,
+                          options: _mergeDropdownOptions(
+                            _motherTongueOptions,
+                            _selectedMotherTongue,
+                          ),
+                          hint: 'Mother tongue',
+                          onChanged: (value) =>
+                              update(() => _selectedMotherTongue = value),
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Profile Managed By',
+                          value: _selectedProfileManagedBy,
+                          options: _mergeDropdownOptions(
+                            _profileManagedByOptions,
+                            _selectedProfileManagedBy,
+                          ),
+                          hint: 'Managed by',
+                          onChanged: (value) =>
+                              update(() => _selectedProfileManagedBy = value),
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _DropdownField(
+                                label: 'Min Height',
+                                value: _selectedHeightMin,
+                                options: _mergeDropdownOptions(
+                                  _heightOptions,
+                                  _selectedHeightMin,
+                                ),
+                                hint: 'Min height',
+                                onChanged: (value) =>
+                                    update(() => _selectedHeightMin = value),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _DropdownField(
+                                label: 'Max Height',
+                                value: _selectedHeightMax,
+                                options: _mergeDropdownOptions(
+                                  _heightOptions,
+                                  _selectedHeightMax,
+                                ),
+                                hint: 'Max height',
+                                onChanged: (value) =>
+                                    update(() => _selectedHeightMax = value),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _DropdownField(
+                          label: 'Income',
+                          value: _selectedIncome,
+                          options: _mergeDropdownOptions(
+                            _incomeOptions,
+                            _selectedIncome,
+                          ),
+                          hint: 'Income',
+                          onChanged: (value) =>
+                              update(() => _selectedIncome = value),
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _DropdownField(
+                                label: 'Diet',
+                                value: _selectedDiet,
+                                options: _mergeDropdownOptions(
+                                  _dietOptions,
+                                  _selectedDiet,
+                                ),
+                                hint: 'Diet',
+                                onChanged: (value) =>
+                                    update(() => _selectedDiet = value),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _DropdownField(
+                                label: 'Manglik',
+                                value: _selectedManglik,
+                                options: _mergeDropdownOptions(
+                                  _manglikOptions,
+                                  _selectedManglik,
+                                ),
+                                hint: 'Manglik',
+                                onChanged: (value) =>
+                                    update(() => _selectedManglik = value),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: _loading
+                              ? null
+                              : () {
+                                  Navigator.of(dialogContext).pop();
+                                  unawaited(_load());
+                                },
+                          icon: const Icon(Icons.favorite_rounded),
+                          label: const Text('Apply Filters'),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton(
+                          onPressed: () {
+                            _minAge.clear();
+                            _maxAge.clear();
+                            _city.clear();
+                            _religion.clear();
+                            _caste.clear();
+                            _profession.clear();
+                            _education.clear();
+                            _maritalStatus.clear();
+                            _motherTongue.clear();
+                            update(() {
+                              _selectedCity = null;
+                              _selectedReligion = null;
+                              _selectedCaste = null;
+                              _selectedProfession = null;
+                              _selectedEducation = null;
+                              _selectedMaritalStatus = null;
+                              _selectedMotherTongue = null;
+                              _selectedHeightMin = null;
+                              _selectedHeightMax = null;
+                              _selectedIncome = null;
+                              _selectedDiet = null;
+                              _selectedManglik = null;
+                              _selectedProfileManagedBy = null;
+                              _availableCastes = const <String>[];
+                              _browseMode = 'matches';
+                            });
+                            Navigator.of(dialogContext).pop();
+                            unawaited(_load());
+                          },
+                          child: const Text('Clear All'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return SlideTransition(
+          position: Tween<Offset>(begin: const Offset(1, 0), end: Offset.zero)
+              .animate(
+                CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
+              ),
+          child: child,
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -3833,70 +5218,114 @@ class _BrowseTabState extends State<BrowseTab> {
               bottom: false,
               child: Container(
                 margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-                padding: const EdgeInsets.all(20),
+                padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
                 decoration: BoxDecoration(
                   gradient: VSGradients.matrimonialHero,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  children: [
-                    if (widget.showBackButton)
-                      IconButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        icon: const Icon(
-                          Icons.arrow_back_rounded,
-                          color: Colors.white,
-                        ),
-                      ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'Find Your Match',
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${_matches.length} profiles available',
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.white70,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    OutlinedButton.icon(
-                      onPressed: () =>
-                          setState(() => _showFilters = !_showFilters),
-                      icon: const Icon(
-                        Icons.filter_list,
-                        color: Colors.white,
-                        size: 20,
-                      ),
-                      label: Text(
-                        _showFilters ? 'Hide' : 'Filters',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        backgroundColor: Colors.white.withValues(alpha: 0.15),
-                        side: const BorderSide(color: Colors.white24),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
+                  borderRadius: BorderRadius.circular(30),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x245F0924),
+                      blurRadius: 26,
+                      offset: Offset(0, 14),
                     ),
                   ],
                 ),
-              ),
+                child: Stack(
+                  children: [
+                    Positioned(
+                      right: -28,
+                      top: -34,
+                      child: Container(
+                        width: 128,
+                        height: 128,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.10),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            if (widget.showBackButton)
+                              IconButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                icon: const Icon(
+                                  Icons.arrow_back_rounded,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Matches',
+                                    style: TextStyle(
+                                      fontSize: 30,
+                                      fontWeight: FontWeight.w900,
+                                      color: Colors.white,
+                                      letterSpacing: -0.5,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    'Curated matrimonial matches',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFFFFE8EE),
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            _MatchHeroStat(
+                              icon: Icons.favorite_rounded,
+                              label: '${_matches.length}',
+                              value: 'Profiles',
+                            ),
+                            const SizedBox(width: 10),
+                            const Spacer(),
+                            OutlinedButton.icon(
+                              onPressed: _openFilterPanel,
+                              icon: const Icon(
+                                Icons.filter_list,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              label: Text(
+                                'Filters',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                backgroundColor: Colors.white.withValues(
+                                  alpha: 0.15,
+                                ),
+                                side: const BorderSide(color: Colors.white24),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ).animate().fadeIn(duration: 360.ms).slideY(begin: -0.05, end: 0),
             ),
             SizedBox(
               height: 64,
@@ -3908,12 +5337,12 @@ class _BrowseTabState extends State<BrowseTab> {
                     icon: Icons.tune_rounded,
                     label: 'Search',
                     value: 'Refine preferences',
-                    selected: _showFilters || _browseMode == 'search',
+                    selected: _browseMode == 'search',
                     onTap: () {
                       setState(() {
                         _browseMode = 'search';
-                        _showFilters = true;
                       });
+                      _openFilterPanel();
                     },
                   ),
                   const SizedBox(width: 10),
@@ -3947,7 +5376,7 @@ class _BrowseTabState extends State<BrowseTab> {
                 ],
               ),
             ),
-            if (_showFilters)
+            if (false && _showFilters)
               Container(
                 margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
                 decoration: BoxDecoration(
@@ -4323,11 +5752,20 @@ class _BrowseTabState extends State<BrowseTab> {
                           child: Container(
                             margin: const EdgeInsets.only(bottom: 16),
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(
-                                color: const Color(0xFFE8DCC8),
+                              gradient: const LinearGradient(
+                                colors: [Colors.white, Color(0xFFFFFBF4)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
                               ),
+                              borderRadius: BorderRadius.circular(28),
+                              border: Border.all(color: _borderColor),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Color(0x147C1838),
+                                  blurRadius: 24,
+                                  offset: Offset(0, 14),
+                                ),
+                              ],
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -4335,19 +5773,19 @@ class _BrowseTabState extends State<BrowseTab> {
                                 Stack(
                                   children: [
                                     Container(
-                                      height: 260,
+                                      height: 280,
                                       width: double.infinity,
                                       decoration: const BoxDecoration(
                                         color: Color(0xFFFFF0F0),
                                         borderRadius: BorderRadius.vertical(
-                                          top: Radius.circular(16),
+                                          top: Radius.circular(28),
                                         ),
                                       ),
                                       child: _PhotoCarousel(
                                         profile: galleryProfile,
-                                        height: 260,
+                                        height: 280,
                                         radius: const BorderRadius.vertical(
-                                          top: Radius.circular(16),
+                                          top: Radius.circular(28),
                                         ),
                                       ),
                                     ),
@@ -4440,6 +5878,17 @@ class _BrowseTabState extends State<BrowseTab> {
                                           icon: Icons.favorite_border,
                                           text: p['religion'].toString(),
                                         ),
+                                      _MiniDetail(
+                                        icon: Icons.manage_accounts_rounded,
+                                        text:
+                                            'Managed by ${(p['profileManagedBy'] ?? p['profile_managed_by'] ?? 'Self')}',
+                                      ),
+                                      const SizedBox(height: 14),
+                                      _KundliCompatibilityCard(
+                                        currentUser: widget.user,
+                                        match: p,
+                                        compact: true,
+                                      ),
                                       if (p['requestSent'] == true)
                                         Padding(
                                           padding: const EdgeInsets.only(
@@ -4532,6 +5981,11 @@ int? _connectionDaysLeft(Map<String, dynamic> profile) {
   if (seconds <= 0) return 0;
   final days = (seconds / 86400).ceil();
   return days.clamp(0, 30);
+}
+
+DateTime _capConnectionExpiry(DateTime expiresAt) {
+  final max = DateTime.now().add(const Duration(days: 30));
+  return expiresAt.isAfter(max) ? max : expiresAt;
 }
 
 bool _canRequestExtension({
@@ -4662,8 +6116,12 @@ class _ConnectionsTabState extends State<ConnectionsTab>
     try {
       final response = await action();
       if (mounted && approving) {
-        final newExpiry = (response['expires_at'] ?? response['new_expires_at'])
-            ?.toString();
+        final newExpiry =
+            (response['expiresAt'] ??
+                    response['expires_at'] ??
+                    response['newExpiresAt'] ??
+                    response['new_expires_at'])
+                ?.toString();
         setState(() {
           final next = Map<String, dynamic>.from(_data);
           final active = List<dynamic>.from(
@@ -4674,14 +6132,10 @@ class _ConnectionsTabState extends State<ConnectionsTab>
             final id = (item['connection_id'] ?? item['connectionId'] ?? '')
                 .toString();
             if (id != connectionId) return raw;
-            final currentExpiry =
-                DateTime.tryParse(
-                  (item['expiresAt'] ?? item['expires_at'] ?? '').toString(),
-                ) ??
-                DateTime.now();
-            final expiry =
+            final parsedExpiry =
                 DateTime.tryParse(newExpiry ?? '') ??
-                currentExpiry.add(const Duration(days: 15));
+                DateTime.now().add(const Duration(days: 15));
+            final expiry = _capConnectionExpiry(parsedExpiry);
             item['expiresAt'] = expiry.toIso8601String();
             item['expires_at'] = expiry.toIso8601String();
             item['extension_request'] = {
@@ -4732,23 +6186,45 @@ class _ConnectionsTabState extends State<ConnectionsTab>
             child: Container(
               width: double.infinity,
               margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
               decoration: BoxDecoration(
                 gradient: VSGradients.matrimonialHero,
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x245F0924),
+                    blurRadius: 22,
+                    offset: Offset(0, 12),
+                  ),
+                ],
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.favorite_rounded, color: Colors.white),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Your connections: $count/$max active',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
+                  Row(
+                    children: [
+                      const Icon(Icons.favorite_rounded, color: Colors.white),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Your connections: $count/$max active',
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Mutual matches stay focused with a 30-day maximum window.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: Color(0xFFFFE8EE),
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ],
@@ -4758,9 +6234,16 @@ class _ConnectionsTabState extends State<ConnectionsTab>
           Container(
             margin: const EdgeInsets.fromLTRB(14, 12, 14, 0),
             decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _borderColor),
+              color: Colors.white.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: VSColors.border),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0F5F0924),
+                  blurRadius: 14,
+                  offset: Offset(0, 6),
+                ),
+              ],
             ),
             child: TabBar(
               controller: _tabs,
@@ -4798,6 +6281,9 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                         _applyRelationshipStatus(p, 'CONNECTED');
                       }
                       final daysLeft = _connectionDaysLeft(p);
+                      final expiresAt = _parseLocalDateTime(
+                        (p['expiresAt'] ?? p['expires_at'])?.toString(),
+                      );
                       final connectionId =
                           (p['connection_id'] ?? p['connectionId'] ?? '')
                               .toString();
@@ -4838,9 +6324,11 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                             ),
                           );
                         },
-                        badge: daysLeft == null
+                        badge: expiresAt == null
                             ? null
-                            : _TimerBadge(daysLeft: daysLeft),
+                            : _TimerBadge(
+                                expiresAt: _capConnectionExpiry(expiresAt),
+                              ),
                         trailing: Wrap(
                           spacing: 8,
                           runSpacing: 8,
@@ -5081,10 +6569,13 @@ class _MessagesTabState extends State<MessagesTab> {
   Map<String, ChatMessage> _lastMessageByPartner = <String, ChatMessage>{};
   bool _openedInitialPartner = false;
   Timer? _refreshTimer;
+  String get _cacheScope =>
+      'messages:${widget.user['id']?.toString() ?? widget.user['email']?.toString() ?? 'guest'}';
 
   @override
   void initState() {
     super.initState();
+    unawaited(_hydrateCachedData());
     _load();
     _refreshTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (widget.active) _load(silent: true);
@@ -5106,6 +6597,37 @@ class _MessagesTabState extends State<MessagesTab> {
   void dispose() {
     _refreshTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _hydrateCachedData() async {
+    final cachedConnections = await _readCachedList('$_cacheScope:connections');
+    final cachedUnread = await _readCachedMap('$_cacheScope:unread');
+    final cachedLast = await _readCachedMap('$_cacheScope:last_messages');
+    if (!mounted) return;
+    final unreadByPartner = <String, int>{};
+    for (final entry in (cachedUnread ?? <String, dynamic>{}).entries) {
+      final value = entry.value;
+      if (value is num) unreadByPartner[entry.key] = value.toInt();
+    }
+    final lastByPartner = <String, ChatMessage>{};
+    for (final entry in (cachedLast ?? <String, dynamic>{}).entries) {
+      final value = entry.value;
+      if (value is Map) {
+        lastByPartner[entry.key] = ChatMessage.fromMap(
+          Map<String, dynamic>.from(value),
+        );
+      }
+    }
+    setState(() {
+      if (cachedConnections != null) {
+        _connections = cachedConnections;
+      }
+      _unreadByPartner = unreadByPartner;
+      _lastMessageByPartner = lastByPartner;
+      if (_connections.isNotEmpty) {
+        _loading = false;
+      }
+    });
   }
 
   Future<void> _load({bool silent = false}) async {
@@ -5154,6 +6676,16 @@ class _MessagesTabState extends State<MessagesTab> {
         _unreadByPartner = unreadByPartner;
         _lastMessageByPartner = lastByPartner;
       });
+      unawaited(_saveCachedList('$_cacheScope:connections', connections));
+      unawaited(_saveCachedMap('$_cacheScope:unread', unreadByPartner));
+      unawaited(
+        _saveCachedMap(
+          '$_cacheScope:last_messages',
+          lastByPartner.map(
+            (key, value) => MapEntry<String, dynamic>(key, value.toMap()),
+          ),
+        ),
+      );
       _openInitialPartnerIfNeeded(connections);
     } catch (e) {
       if (!silent && mounted) {
@@ -5220,108 +6752,445 @@ class _MessagesTabState extends State<MessagesTab> {
 
   @override
   Widget build(BuildContext context) {
+    final totalUnread = _unreadByPartner.values.fold<int>(
+      0,
+      (sum, value) => sum + value,
+    );
     return Scaffold(
       backgroundColor: _surfaceColor,
-      body: RefreshIndicator(
-        onRefresh: () => _load(),
-        child: _loading && _connections.isEmpty
-            ? const Center(child: CircularProgressIndicator())
-            : _connections.isEmpty
-            ? ListView(
-                children: const [
-                  SizedBox(height: 180),
-                  Icon(
-                    Icons.chat_bubble_outline,
-                    size: 64,
-                    color: _textSecondaryColor,
+      body: VSPageShell(
+        child: RefreshIndicator(
+          onRefresh: () => _load(),
+          child: CustomScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(
+                child: SafeArea(
+                  bottom: false,
+                  child: _ChatsListHeader(
+                    activeChats: _connections.length,
+                    unreadCount: totalUnread,
                   ),
-                  SizedBox(height: 24),
-                  Text(
-                    'No messages yet',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: _textColor,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Connect with someone to start chatting',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: _textSecondaryColor),
-                  ),
-                ],
-              )
-            : ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _connections.length,
-                itemBuilder: (_, index) {
-                  final p = Map<String, dynamic>.from(
-                    _connections[index] as Map,
-                  );
-                  final partnerId = p['id']?.toString() ?? '';
-                  final unread = _unreadByPartner[partnerId] ?? 0;
-                  final lastMessage = _lastMessageByPartner[partnerId];
-                  final myId = widget.user['id']?.toString() ?? '';
-                  final preview = lastMessage == null
-                      ? _personSummary(p)
-                      : '${lastMessage.senderId == myId ? 'You: ' : ''}${lastMessage.content}';
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: unread > 0
-                            ? _primaryColor.withValues(alpha: 0.35)
-                            : _borderColor,
-                      ),
-                    ),
-                    child: ListTile(
-                      leading: _CircularProfileAvatar(profile: p, size: 54),
-                      title: Text(p['name']?.toString() ?? 'User'),
-                      subtitle: Text(
-                        preview,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (unread > 0)
-                            Container(
-                              margin: const EdgeInsets.only(right: 8),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: _primaryColor,
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                unread > 99 ? '99+' : unread.toString(),
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          const Icon(
-                            Icons.chevron_right,
-                            color: _textSecondaryColor,
-                          ),
-                        ],
-                      ),
-                      onTap: () => unawaited(_openChat(p)),
-                    ),
-                  );
-                },
+                ),
               ),
+              if (_loading && _connections.isEmpty)
+                const SliverFillRemaining(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_connections.isEmpty)
+                const SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: _EmptyChatsState(),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+                  sliver: SliverList.builder(
+                    itemCount: _connections.length,
+                    itemBuilder: (_, index) {
+                      final p = Map<String, dynamic>.from(
+                        _connections[index] as Map,
+                      );
+                      final partnerId = p['id']?.toString() ?? '';
+                      final unread = _unreadByPartner[partnerId] ?? 0;
+                      final lastMessage = _lastMessageByPartner[partnerId];
+                      final myId = widget.user['id']?.toString() ?? '';
+                      final preview = lastMessage == null
+                          ? _personSummary(p)
+                          : '${lastMessage.senderId == myId ? 'You: ' : ''}${lastMessage.content}';
+                      return _ChatListTile(
+                        profile: p,
+                        preview: preview,
+                        unread: unread,
+                        lastMessage: lastMessage,
+                        onTap: () => unawaited(_openChat(p)),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
       ),
     );
+  }
+}
+
+class _ChatsListHeader extends StatelessWidget {
+  const _ChatsListHeader({
+    required this.activeChats,
+    required this.unreadCount,
+  });
+
+  final int activeChats;
+  final int unreadCount;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: VSGradients.matrimonialHero,
+        borderRadius: BorderRadius.circular(30),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x245F0924),
+            blurRadius: 26,
+            offset: Offset(0, 14),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -24,
+            top: -28,
+            child: Container(
+              width: 104,
+              height: 104,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.10),
+              ),
+            ),
+          ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.18),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(color: Colors.white24),
+                    ),
+                    child: const Icon(
+                      Icons.forum_rounded,
+                      color: Colors.white,
+                      size: 26,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Chats',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Private conversations with active matches',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Color(0xFFFFE8EE),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  _ChatHeaderChip(
+                    icon: Icons.favorite_rounded,
+                    label: '$activeChats active',
+                  ),
+                  _ChatHeaderChip(
+                    icon: unreadCount > 0
+                        ? Icons.mark_chat_unread_rounded
+                        : Icons.done_all_rounded,
+                    label: unreadCount > 0
+                        ? '$unreadCount unread'
+                        : 'All caught up',
+                  ),
+                  const _ChatHeaderChip(
+                    icon: Icons.verified_user_rounded,
+                    label: 'Secure',
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 360.ms).slideY(begin: -0.08, end: 0);
+  }
+}
+
+class _ChatHeaderChip extends StatelessWidget {
+  const _ChatHeaderChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: Colors.white),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyChatsState extends StatelessWidget {
+  const _EmptyChatsState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 48),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 92,
+            height: 92,
+            decoration: BoxDecoration(
+              gradient: VSGradients.goldAccent,
+              borderRadius: BorderRadius.circular(32),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x1A8B0000),
+                  blurRadius: 22,
+                  offset: Offset(0, 12),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.chat_bubble_outline_rounded,
+              color: _primaryColor,
+              size: 42,
+            ),
+          ),
+          const SizedBox(height: 18),
+          const Text(
+            'No chats yet',
+            style: TextStyle(
+              color: _textColor,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'When a connection becomes active, your conversation will appear here with cached previews and unread counts.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _textSecondaryColor,
+              fontSize: 13,
+              height: 1.45,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 320.ms).scale(begin: const Offset(0.96, 0.96));
+  }
+}
+
+class _ChatListTile extends StatelessWidget {
+  const _ChatListTile({
+    required this.profile,
+    required this.preview,
+    required this.unread,
+    required this.lastMessage,
+    required this.onTap,
+  });
+
+  final Map<String, dynamic> profile;
+  final String preview;
+  final int unread;
+  final ChatMessage? lastMessage;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final name = profile['name']?.toString().trim().isNotEmpty == true
+        ? profile['name'].toString()
+        : 'Match';
+    final details = _personSummary(profile);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(24),
+          child: Ink(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.94),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: unread > 0
+                    ? _primaryColor.withValues(alpha: 0.25)
+                    : _borderColor,
+              ),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x12000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    _CircularProfileAvatar(
+                      profile: profile,
+                      size: 58,
+                      borderColor: unread > 0 ? _primaryColor : Colors.white,
+                    ),
+                    if (unread > 0)
+                      Positioned(
+                        right: -2,
+                        top: -2,
+                        child: Container(
+                          width: 18,
+                          height: 18,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF14B86A),
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: _textColor,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          if (lastMessage != null)
+                            Text(
+                              _formatMessageTime(lastMessage!.createdAt),
+                              style: TextStyle(
+                                color: unread > 0
+                                    ? _primaryColor
+                                    : _textSecondaryColor,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        preview.trim().isEmpty ? details : preview,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: unread > 0 ? _textColor : _textSecondaryColor,
+                          fontSize: 13,
+                          fontWeight: unread > 0
+                              ? FontWeight.w800
+                              : FontWeight.w600,
+                        ),
+                      ),
+                      if (details.isNotEmpty && lastMessage != null) ...[
+                        const SizedBox(height: 5),
+                        Text(
+                          details,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _textSecondaryColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                if (unread > 0)
+                  Container(
+                    constraints: const BoxConstraints(minWidth: 28),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: VSGradients.matrimonialHero,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      unread > 99 ? '99+' : unread.toString(),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  )
+                else
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: _textSecondaryColor,
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ).animate().fadeIn(duration: 260.ms).slideY(begin: 0.05, end: 0);
   }
 }
 
@@ -5831,9 +7700,20 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                       margin: const EdgeInsets.all(16),
                       padding: const EdgeInsets.all(24),
                       decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFE8DCC8)),
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFFFBF1), Color(0xFFFFE7EF)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: VSColors.border),
+                        boxShadow: const [
+                          BoxShadow(
+                            color: Color(0x127C1838),
+                            blurRadius: 20,
+                            offset: Offset(0, 10),
+                          ),
+                        ],
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -5892,6 +7772,25 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                                 : 'Visible after paid mutual connection',
                           ),
                           _ProfileDetailRow(
+                            icon: Icons.schedule_rounded,
+                            label: 'Birth Time',
+                            value: canSeeContact
+                                ? (p['birthTime']?.toString() ??
+                                      p['birth_time']?.toString() ??
+                                      'N/A')
+                                : 'Visible after paid mutual connection',
+                          ),
+                          _ProfileDetailRow(
+                            icon: Icons.temple_hindu_rounded,
+                            label: 'Birth Place',
+                            value: canSeeContact
+                                ? (p['birthPlace']?.toString() ??
+                                      p['birth_place']?.toString() ??
+                                      p['city']?.toString() ??
+                                      'N/A')
+                                : 'Visible after paid mutual connection',
+                          ),
+                          _ProfileDetailRow(
                             icon: Icons.school,
                             label: 'Education',
                             value: p['education']?.toString() ?? 'N/A',
@@ -5934,9 +7833,25 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                             label: 'Hobbies',
                             value: p['hobbies']?.toString() ?? 'N/A',
                           ),
+                          _ProfileDetailRow(
+                            icon: Icons.manage_accounts_rounded,
+                            label: 'Profile Managed By',
+                            value:
+                                p['profileManagedBy']?.toString() ??
+                                p['profile_managed_by']?.toString() ??
+                                'Self',
+                          ),
                         ],
                       ),
                     ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: _KundliCompatibilityCard(
+                        currentUser: subscriptionUser,
+                        match: p,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     if (galleryPhotos.isNotEmpty)
                       _CreamCard(
                         child: Column(
@@ -5975,7 +7890,7 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                                         source: galleryPhotos[index],
                                         width: 94,
                                         height: 94,
-                                        fit: BoxFit.cover,
+                                        fit: BoxFit.contain,
                                         fallback: () => Container(
                                           width: 94,
                                           height: 94,
@@ -6018,7 +7933,7 @@ class _MatchProfilePageState extends State<MatchProfilePage> {
                                                   source: galleryPhotos[index],
                                                   width: 94,
                                                   height: 94,
-                                                  fit: BoxFit.cover,
+                                                  fit: BoxFit.contain,
                                                   fallback: () => Container(
                                                     width: 94,
                                                     height: 94,
@@ -6175,6 +8090,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
   final _picker = ImagePicker();
   late final TextEditingController _name;
   late final TextEditingController _dob;
+  late final TextEditingController _birthTime;
+  late final TextEditingController _birthPlace;
   late final TextEditingController _city;
   late final TextEditingController _education;
   late final TextEditingController _occupation;
@@ -6209,6 +8126,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
   bool _uploadingPhoto = false;
   List<String> _photos = <String>[];
   String? _selectedCity;
+  String? _selectedBirthTime;
+  String? _selectedProfileManagedBy;
   String? _selectedReligion;
   String? _selectedCaste;
   String? _selectedSubCaste;
@@ -6284,6 +8203,16 @@ class _EditProfilePageState extends State<EditProfilePage> {
     final p = widget.initialProfile;
     _name = TextEditingController(text: p['name']?.toString() ?? '');
     _dob = TextEditingController(text: p['dob']?.toString() ?? '');
+    _birthTime = TextEditingController(
+      text: p['birthTime']?.toString() ?? p['birth_time']?.toString() ?? '',
+    );
+    _birthPlace = TextEditingController(
+      text:
+          p['birthPlace']?.toString() ??
+          p['birth_place']?.toString() ??
+          p['city']?.toString() ??
+          '',
+    );
     _city = TextEditingController(text: p['city']?.toString() ?? '');
     _education = TextEditingController(text: p['education']?.toString() ?? '');
     _occupation = TextEditingController(
@@ -6365,6 +8294,16 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _photoVisible =
         (p['photoVisibility']?.toString().toLowerCase() ?? 'yes') != 'no';
     _selectedCity = _city.text.trim().isEmpty ? null : _city.text.trim();
+    _selectedBirthTime = _birthTime.text.trim().isEmpty
+        ? null
+        : _birthTime.text.trim();
+    _selectedProfileManagedBy =
+        (p['profileManagedBy'] ?? p['profile_managed_by'] ?? 'Self')
+            .toString()
+            .trim();
+    if (!_profileManagedByOptions.contains(_selectedProfileManagedBy)) {
+      _selectedProfileManagedBy = 'Self';
+    }
     _selectedReligion = _religion.text.trim().isEmpty
         ? null
         : _religion.text.trim();
@@ -6449,6 +8388,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
   void dispose() {
     _name.dispose();
     _dob.dispose();
+    _birthTime.dispose();
+    _birthPlace.dispose();
     _city.dispose();
     _education.dispose();
     _occupation.dispose();
@@ -6549,6 +8490,35 @@ class _EditProfilePageState extends State<EditProfilePage> {
     setState(() => _availableSubCastes = merged);
   }
 
+  Future<void> _pickBirthTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _parseBirthTime(_birthTime.text),
+      helpText: 'Select birth time',
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            timePickerTheme: TimePickerThemeData(
+              dialHandColor: _primaryColor,
+              hourMinuteTextColor: _textColor,
+              dayPeriodTextColor: _primaryColor,
+              dayPeriodBorderSide: const BorderSide(color: _borderColor),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(24),
+              ),
+            ),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+    );
+    if (picked == null) return;
+    setState(() {
+      _selectedBirthTime = _formatTimeOfDay(picked);
+      _birthTime.text = _selectedBirthTime!;
+    });
+  }
+
   Future<void> _save() async {
     final name = _name.text.trim();
     final dob = _dob.text.trim();
@@ -6563,6 +8533,8 @@ class _EditProfilePageState extends State<EditProfilePage> {
 
       if (name.isEmpty) missing.add('Full name');
       if (dob.isEmpty || age == null) missing.add('Valid date of birth');
+      requireText('Birth time', _birthTime);
+      requireText('Birth place', _birthPlace);
       if (phone.isEmpty) missing.add('Phone number');
       if (!_genderOptions.contains(_gender)) missing.add('Gender');
       requireText('City', _city);
@@ -6620,6 +8592,12 @@ class _EditProfilePageState extends State<EditProfilePage> {
         'name': name,
         'dob': dob,
         'date_of_birth': dob,
+        'birthTime': _birthTime.text.trim(),
+        'birth_time': _birthTime.text.trim(),
+        'birthPlace': _birthPlace.text.trim(),
+        'birth_place': _birthPlace.text.trim(),
+        'profileManagedBy': _selectedProfileManagedBy ?? 'Self',
+        'profile_managed_by': _selectedProfileManagedBy ?? 'Self',
         'age': age,
         'gender': _gender.toLowerCase(),
         'city': city,
@@ -6924,7 +8902,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
                                 source: _photos[index],
                                 width: 92,
                                 height: 92,
-                                fit: BoxFit.cover,
+                                fit: BoxFit.contain,
                                 fallback: () => Container(
                                   width: 92,
                                   height: 92,
@@ -7083,6 +9061,43 @@ class _EditProfilePageState extends State<EditProfilePage> {
                       ),
                     ),
                     onChanged: (_) => setState(() {}),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _birthTime,
+                          readOnly: true,
+                          decoration: InputDecoration(
+                            labelText: 'Birth Time',
+                            hintText: 'HH:MM AM/PM',
+                            suffixIcon: IconButton(
+                              icon: const Icon(Icons.schedule_rounded),
+                              onPressed: _pickBirthTime,
+                            ),
+                          ),
+                          onTap: _pickBirthTime,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: _LabeledField(
+                          label: 'Birth Place',
+                          controller: _birthPlace,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  _DropdownField(
+                    label: 'Profile Managed By',
+                    value: _selectedProfileManagedBy,
+                    options: _profileManagedByOptions,
+                    hint: 'Select who manages this profile',
+                    onChanged: (value) => setState(
+                      () => _selectedProfileManagedBy = value ?? 'Self',
+                    ),
                   ),
                   const SizedBox(height: 16),
                   _LabeledField(
@@ -7852,7 +9867,7 @@ class _SubscriptionPageState extends State<SubscriptionPage> {
                         ...features.map(
                           (f) => Padding(
                             padding: const EdgeInsets.only(bottom: 6),
-                            child: Text('• ${f.toString()}'),
+                            child: Text('â€¢ ${f.toString()}'),
                           ),
                         ),
                         const SizedBox(height: 12),
@@ -8230,11 +10245,14 @@ class _ChatPageState extends State<ChatPage> {
   bool _shouldReconnect = true;
   int _reconnectAttempt = 0;
   bool _typingEnabled = true;
+  String get _cacheScope =>
+      'thread:${widget.currentUser['id']?.toString() ?? 'guest'}:${_partnerId}';
 
   @override
   void initState() {
     super.initState();
     unawaited(_loadTypingPreference());
+    unawaited(_hydrateCachedMessages());
     _load();
     _connectSocket();
     _pollTimer = Timer.periodic(
@@ -8314,6 +10332,19 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  Future<void> _hydrateCachedMessages() async {
+    final cached = await _readCachedList('$_cacheScope:messages');
+    if (!mounted || cached == null || cached.isEmpty) return;
+    final items =
+        cached.map((item) => ChatMessage.fromMap(_asMap(item))).toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    setState(() {
+      _messages = items;
+      _loading = false;
+    });
+    _scrollToBottom();
+  }
+
   Future<void> _load({bool silent = false}) async {
     if (!silent) setState(() => _loading = true);
     try {
@@ -8327,6 +10358,12 @@ class _ChatPageState extends State<ChatPage> {
         _chatLockedFromServer = false;
       });
       _mergeServerMessages(serverMessages);
+      unawaited(
+        _saveCachedList(
+          '$_cacheScope:messages',
+          serverMessages.map((item) => item.toMap()).toList(),
+        ),
+      );
       unawaited(_markThreadRead());
     } catch (e) {
       if (!mounted) return;
@@ -8585,18 +10622,6 @@ class _ChatPageState extends State<ChatPage> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
-  }
-
-  void _insertEmoji(String emoji) {
-    final selection = _text.selection;
-    final current = _text.text;
-    final start = selection.start < 0 ? current.length : selection.start;
-    final end = selection.end < 0 ? current.length : selection.end;
-    final next = current.replaceRange(start, end, emoji);
-    _text.value = TextEditingValue(
-      text: next,
-      selection: TextSelection.collapsed(offset: start + emoji.length),
-    );
   }
 
   bool _isSameLocalDay(String? a, String? b) {
@@ -8914,46 +10939,6 @@ class _ChatPageState extends State<ChatPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _EmojiStrip(onEmoji: _insertEmoji),
-                  if (false)
-                    SizedBox(
-                      height: 38,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: const [
-                          '😊',
-                          '❤️',
-                          '🙏',
-                          '👍',
-                          '🌹',
-                          '✨',
-                        ].length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 8),
-                        itemBuilder: (_, index) {
-                          const emojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
-                          return InkWell(
-                            onTap: () => _insertEmoji(emojis[index]),
-                            borderRadius: BorderRadius.circular(999),
-                            child: Container(
-                              width: 38,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFFFF0F0),
-                                borderRadius: BorderRadius.circular(999),
-                                border: Border.all(
-                                  color: const Color(0xFFE8DCC8),
-                                ),
-                              ),
-                              child: Text(
-                                emojis[index],
-                                style: const TextStyle(fontSize: 18),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  const SizedBox(height: 8),
                   if (!_chatUnlocked || _chatLockedFromServer)
                     Container(
                       width: double.infinity,
@@ -9256,47 +11241,10 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 const _SettingsTile(
                   icon: Icons.info_outline,
-                  label: 'App Version 1.0.2',
+                  label: 'App Version 1.0.3',
                 ),
               ],
             ),
-    );
-  }
-}
-
-class _EmojiStrip extends StatelessWidget {
-  const _EmojiStrip({required this.onEmoji});
-
-  final ValueChanged<String> onEmoji;
-
-  @override
-  Widget build(BuildContext context) {
-    const emojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
-    const fixedEmojis = ['😊', '❤️', '🙏', '👍', '🌹', '✨'];
-    return SizedBox(
-      height: 38,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: fixedEmojis.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, index) => InkWell(
-          onTap: () => onEmoji(fixedEmojis[index]),
-          borderRadius: BorderRadius.circular(999),
-          child: Container(
-            width: 38,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFF0F0),
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: const Color(0xFFE8DCC8)),
-            ),
-            child: Text(
-              fixedEmojis[index],
-              style: const TextStyle(fontSize: 18),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -9325,6 +11273,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
+      await widget.api.createNotificationDigest(widget.token);
       final results = await Future.wait([
         widget.api.notifications(widget.token),
         widget.api.unreadCount(widget.token),
@@ -9333,8 +11282,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
         results[0] as List? ?? <dynamic>[],
       );
       final unreadChats = (results[1] as num?)?.toInt() ?? 0;
+      final backendHasChatUnread = notifications.any((item) {
+        final type = _asMap(item)['type']?.toString().toLowerCase() ?? '';
+        return type == 'chat_unread' || type == 'chat_message';
+      });
       final merged = <dynamic>[
-        if (unreadChats > 0)
+        if (unreadChats > 0 && !backendHasChatUnread)
           {
             'id': 'chat_unread',
             'type': 'chat_unread',
@@ -9926,6 +11879,151 @@ class _LegalTextBlock extends StatelessWidget {
   }
 }
 
+class FeedbackReportPage extends StatefulWidget {
+  const FeedbackReportPage({
+    super.key,
+    required this.api,
+    required this.token,
+    required this.category,
+  });
+
+  final ApiClient api;
+  final String token;
+  final String category;
+
+  @override
+  State<FeedbackReportPage> createState() => _FeedbackReportPageState();
+}
+
+class _FeedbackReportPageState extends State<FeedbackReportPage> {
+  final _subject = TextEditingController();
+  final _message = TextEditingController();
+  bool _submitting = false;
+
+  @override
+  void dispose() {
+    _subject.dispose();
+    _message.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    final message = _message.text.trim();
+    if (message.length < 5) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please add a little more detail.')),
+      );
+      return;
+    }
+    setState(() => _submitting = true);
+    try {
+      await widget.api.submitFeedback(
+        widget.token,
+        category: widget.category,
+        subject: _subject.text.trim(),
+        message: message,
+        screen: widget.category == 'bug' ? 'mobile_app' : 'sidebar',
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.category == 'bug'
+                ? 'Bug report submitted. Thank you.'
+                : 'Feedback submitted. Thank you.',
+          ),
+        ),
+      );
+      Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isBug = widget.category == 'bug';
+    return Scaffold(
+      backgroundColor: _postLoginBackground,
+      appBar: AppBar(title: Text(isBug ? 'Bug Report' : 'Feedback')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(
+              gradient: VSGradients.matrimonialHero,
+              borderRadius: BorderRadius.circular(26),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isBug ? Icons.bug_report_rounded : Icons.rate_review_rounded,
+                  color: Colors.white,
+                  size: 34,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Text(
+                    isBug
+                        ? 'Tell us what broke so we can fix it quickly.'
+                        : 'Share your ideas to make VivaahSetu better.',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      height: 1.35,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _subject,
+            decoration: InputDecoration(
+              labelText: isBug ? 'Bug title' : 'Subject',
+              hintText: isBug
+                  ? 'Example: Notifications not opening'
+                  : 'Your suggestion',
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _message,
+            minLines: 6,
+            maxLines: 10,
+            decoration: InputDecoration(
+              labelText: isBug ? 'What happened?' : 'Your feedback',
+              hintText: isBug
+                  ? 'Steps, expected result, actual result...'
+                  : 'Tell us what would improve your experience...',
+            ),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: _submitting ? null : _submit,
+            icon: _submitting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.send_rounded),
+            label: Text(_submitting ? 'Submitting...' : 'Submit'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
 
@@ -9944,7 +12042,7 @@ class AboutPage extends StatelessWidget {
           Padding(
             padding: EdgeInsets.symmetric(horizontal: 8),
             child: Text(
-              'Version: 1.0.2',
+              'Version: 1.0.3',
               style: TextStyle(fontSize: 13, color: _textSecondaryColor),
             ),
           ),
@@ -10196,7 +12294,7 @@ class _HomeProfilePreviewCard extends StatelessWidget {
     final detailLine = [
       if (occupation.trim().isNotEmpty) occupation.trim(),
       if (religion.isNotEmpty) religion,
-    ].join(' • ');
+    ].join(' â€¢ ');
     final statusLabel = alreadyConnected
         ? 'Connected'
         : requestSent
@@ -10277,7 +12375,7 @@ class _HomeProfilePreviewCard extends StatelessWidget {
                       [
                         if (age != null && age.isNotEmpty) '$age yrs',
                         if (city.isNotEmpty) city,
-                      ].join(' • '),
+                      ].join(' â€¢ '),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -10807,27 +12905,29 @@ class _ConnectionCard extends StatelessWidget {
         : (photos.isEmpty ? 0 : 1);
     galleryProfile['canViewAllPhotos'] = allowAllPhotos;
     return Material(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(22),
           elevation: 0,
           child: InkWell(
             onTap: onTap,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(22),
             child: Container(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.all(15),
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
-                  colors: [Colors.white, Color(0xFFFFFBF4)],
+                  colors: [Colors.white, VSColors.ivory],
                 ),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: VSColors.border),
+                borderRadius: BorderRadius.circular(22),
+                border: Border.all(
+                  color: VSColors.border.withValues(alpha: 0.82),
+                ),
                 boxShadow: const [
                   BoxShadow(
-                    color: Color(0x0F7C1838),
-                    blurRadius: 18,
-                    offset: Offset(0, 10),
+                    color: Color(0x145F0924),
+                    blurRadius: 22,
+                    offset: Offset(0, 12),
                   ),
                 ],
               ),
@@ -11016,22 +13116,53 @@ class _RoundIconButton extends StatelessWidget {
   }
 }
 
-class _TimerBadge extends StatelessWidget {
-  const _TimerBadge({required this.daysLeft});
+class _TimerBadge extends StatefulWidget {
+  const _TimerBadge({required this.expiresAt});
 
-  final int daysLeft;
+  final DateTime expiresAt;
+
+  @override
+  State<_TimerBadge> createState() => _TimerBadgeState();
+}
+
+class _TimerBadgeState extends State<_TimerBadge> {
+  late final Timer _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final urgent = daysLeft <= 5;
-    final displayDays = daysLeft.clamp(0, 30);
+    final cappedExpiry = _capConnectionExpiry(widget.expiresAt);
+    final remaining = cappedExpiry.difference(DateTime.now());
+    final expired = remaining.isNegative;
+    final urgent = !expired && remaining.inHours <= 120;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
-        color: urgent ? const Color(0xFFB42318) : const Color(0xFFFFF4DF),
+        color: expired
+            ? const Color(0xFFB42318)
+            : urgent
+            ? const Color(0xFFFFEEF1)
+            : const Color(0xFFFFF4DF),
         borderRadius: BorderRadius.circular(999),
         border: Border.all(
-          color: urgent ? const Color(0xFFB42318) : const Color(0xFFE6A93A),
+          color: expired
+              ? const Color(0xFFB42318)
+              : urgent
+              ? VSColors.shaadiRose
+              : const Color(0xFFE6A93A),
         ),
       ),
       child: Row(
@@ -11040,21 +13171,48 @@ class _TimerBadge extends StatelessWidget {
           Icon(
             Icons.access_time,
             size: 14,
-            color: urgent ? Colors.white : _textColor,
+            color: expired
+                ? Colors.white
+                : urgent
+                ? _primaryColor
+                : _textColor,
           ),
           const SizedBox(width: 4),
           Text(
-            displayDays > 0 ? '$displayDays days left' : 'Expired',
+            _formatConnectionRemaining(remaining),
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w800,
-              color: urgent ? Colors.white : _textColor,
+              color: expired
+                  ? Colors.white
+                  : urgent
+                  ? _primaryColor
+                  : _textColor,
             ),
           ),
         ],
       ),
     );
   }
+}
+
+DateTime? _parseLocalDateTime(String? input) {
+  final raw = input?.trim();
+  if (raw == null || raw.isEmpty) return null;
+  return DateTime.tryParse(raw)?.toLocal();
+}
+
+String _formatConnectionRemaining(Duration remaining) {
+  if (remaining.isNegative) return 'Expired';
+  if (remaining.inMinutes < 60) {
+    final minutes = remaining.inMinutes <= 0 ? 1 : remaining.inMinutes;
+    return '${minutes}m left';
+  }
+  if (remaining.inHours < 24) return '${remaining.inHours}h left';
+  final days = remaining.inHours ~/ 24;
+  final hours = remaining.inHours % 24;
+  if (hours == 0) return '$days ${days == 1 ? 'day' : 'days'} left';
+  return '${days}d ${hours}h left';
 }
 
 class _ProfileMenuTile extends StatelessWidget {
@@ -11163,11 +13321,22 @@ class _CreamCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFE8DCC8)),
+        gradient: const LinearGradient(
+          colors: [Color(0xFFFFFBF1), Color(0xFFFFE7EF)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: VSColors.border),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x127C1838),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
       ),
       child: child,
     );
@@ -11363,7 +13532,7 @@ class _SmartImage extends StatelessWidget {
     required this.source,
     required this.width,
     required this.height,
-    this.fit = BoxFit.cover,
+    this.fit = BoxFit.contain,
     required this.fallback,
   });
 
@@ -11394,19 +13563,19 @@ class _SmartImage extends StatelessWidget {
         errorBuilder: (_, __, ___) => fallback(),
       );
     }
-    return Image.network(
-      source,
+    return CachedNetworkImage(
+      imageUrl: source,
       width: width,
       height: height,
       fit: fit,
-      cacheWidth: cacheWidth,
-      cacheHeight: cacheHeight,
-      gaplessPlayback: true,
-      errorBuilder: (_, __, ___) => fallback(),
-      loadingBuilder: (context, child, loadingProgress) {
-        if (loadingProgress == null) return child;
-        return fallback();
-      },
+      memCacheWidth: cacheWidth,
+      memCacheHeight: cacheHeight,
+      maxWidthDiskCache: cacheWidth,
+      maxHeightDiskCache: cacheHeight,
+      fadeInDuration: Duration.zero,
+      fadeOutDuration: Duration.zero,
+      placeholder: (_, __) => fallback(),
+      errorWidget: (_, __, ___) => fallback(),
     );
   }
 }
@@ -11772,7 +13941,7 @@ class _CoverPhoto extends StatelessWidget {
             source: photos.first,
             width: double.infinity,
             height: height,
-            fit: BoxFit.cover,
+            fit: BoxFit.contain,
             fallback: _fallback,
           )
         : _fallback();

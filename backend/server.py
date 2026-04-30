@@ -58,8 +58,10 @@ CASHFREE_API_VERSION = "2023-08-01"
 # Connection settings
 MAX_CONNECTIONS = 5
 CONNECTION_DURATION_DAYS = 15
+MAX_CONNECTION_DURATION_DAYS = 30
 MAX_PHOTOS = 5
 DISCOUNT_PERCENT = 70
+CONNECTION_REMINDER_DAYS = {5, 3, 1, 0}
 
 CASTES_BY_RELIGION = {
     "Hindu": [
@@ -162,10 +164,19 @@ class FirebaseSessionInput(BaseModel):
     name: Optional[str] = ""
 
 class ProfileUpdateInput(BaseModel):
+    class Config:
+        extra = "allow"
+
     name: Optional[str] = None
     age: Optional[int] = None
     dob: Optional[str] = None
     date_of_birth: Optional[str] = None
+    birthTime: Optional[str] = None
+    birth_time: Optional[str] = None
+    birthPlace: Optional[str] = None
+    birth_place: Optional[str] = None
+    profileManagedBy: Optional[str] = None
+    profile_managed_by: Optional[str] = None
     gender: Optional[str] = None
     height: Optional[str] = None
     religion: Optional[str] = None
@@ -198,6 +209,19 @@ class SendMessageInput(BaseModel):
     receiverId: Optional[str] = None
     receiver_id: Optional[str] = None
     content: str
+
+class ConnectionExtensionRequest(BaseModel):
+    connection_id: Optional[str] = None
+    connectionId: Optional[str] = None
+
+class FeedbackInput(BaseModel):
+    class Config:
+        extra = "allow"
+
+    category: str = "feedback"
+    subject: Optional[str] = None
+    message: str
+    screen: Optional[str] = None
 
 # ============ HELPERS ============
 
@@ -285,6 +309,18 @@ def serialize_user(user: dict) -> dict:
         u.setdefault("date_of_birth", u.get("dob"))
     if u.get("date_of_birth"):
         u.setdefault("dob", u.get("date_of_birth"))
+    if u.get("birthTime"):
+        u.setdefault("birth_time", u.get("birthTime"))
+    if u.get("birth_time"):
+        u.setdefault("birthTime", u.get("birth_time"))
+    if u.get("birthPlace"):
+        u.setdefault("birth_place", u.get("birthPlace"))
+    if u.get("birth_place"):
+        u.setdefault("birthPlace", u.get("birth_place"))
+    if u.get("profileManagedBy"):
+        u.setdefault("profile_managed_by", u.get("profileManagedBy"))
+    if u.get("profile_managed_by"):
+        u.setdefault("profileManagedBy", u.get("profile_managed_by"))
     photos = [str(item).strip() for item in u.get("photos", []) if str(item).strip()]
     preferred_photo = (
         str(u.get("photoUrl") or "").strip()
@@ -328,6 +364,31 @@ def normalize_ref_list(values: Any) -> List[str]:
             normalized.append(ref)
     return normalized
 
+def parse_utc_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    raw = str(value or "").strip()
+    if not raw:
+        return datetime.now(timezone.utc)
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
+    parsed = datetime.fromisoformat(raw)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+def capped_connection_expiry(value: Any, now: Optional[datetime] = None) -> datetime:
+    current_now = now or datetime.now(timezone.utc)
+    expiry = parse_utc_datetime(value)
+    max_expiry = current_now + timedelta(days=MAX_CONNECTION_DURATION_DAYS)
+    return min(expiry, max_expiry)
+
+def connection_days_remaining(value: Any, now: Optional[datetime] = None) -> int:
+    current_now = now or datetime.now(timezone.utc)
+    expiry = capped_connection_expiry(value, current_now)
+    seconds = int((expiry - current_now).total_seconds())
+    if seconds <= 0:
+        return 0
+    return min(MAX_CONNECTION_DURATION_DAYS, (seconds + 86399) // 86400)
+
 async def find_user_by_ref(value: Any, projection: Optional[Dict[str, int]] = None) -> Optional[dict]:
     ref = normalize_ref(value)
     if not ref:
@@ -336,6 +397,236 @@ async def find_user_by_ref(value: Any, projection: Optional[Dict[str, int]] = No
     if ObjectId.is_valid(ref):
         queries.insert(0, {"_id": ObjectId(ref)})
     return await db.users.find_one({"$or": queries}, projection)
+
+_fcm_access_token: Optional[str] = None
+_fcm_access_token_expires_at: Optional[datetime] = None
+
+def firebase_service_account() -> Optional[Dict[str, Any]]:
+    raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw:
+        path = os.environ.get("FIREBASE_SERVICE_ACCOUNT_FILE", "").strip()
+        if path and Path(path).exists():
+            raw = Path(path).read_text(encoding="utf-8")
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except Exception:
+        logger.warning("Invalid Firebase service account configuration")
+        return None
+
+async def firebase_access_token() -> Optional[str]:
+    global _fcm_access_token, _fcm_access_token_expires_at
+    if (
+        _fcm_access_token
+        and _fcm_access_token_expires_at
+        and _fcm_access_token_expires_at > datetime.now(timezone.utc) + timedelta(minutes=5)
+    ):
+        return _fcm_access_token
+    account = firebase_service_account()
+    if not account:
+        return None
+    now = datetime.now(timezone.utc)
+    claims = {
+        "iss": account.get("client_email"),
+        "scope": "https://www.googleapis.com/auth/firebase.messaging",
+        "aud": account.get("token_uri", "https://oauth2.googleapis.com/token"),
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=55)).timestamp()),
+    }
+    try:
+        assertion = jwt.encode(claims, account["private_key"], algorithm="RS256")
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                claims["aud"],
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                },
+            )
+        response.raise_for_status()
+        data = response.json()
+        _fcm_access_token = data.get("access_token")
+        _fcm_access_token_expires_at = now + timedelta(seconds=int(data.get("expires_in", 3600)))
+        return _fcm_access_token
+    except Exception as exc:
+        logger.warning("Unable to obtain Firebase access token: %s", exc)
+        return None
+
+async def send_push_to_user(user_ref: Any, title: str, body: str, payload: str = "notifications") -> None:
+    user = await find_user_by_ref(user_ref)
+    token = (user or {}).get("fcmToken")
+    if not token:
+        return
+    account = firebase_service_account()
+    project_id = (account or {}).get("project_id") or os.environ.get("FIREBASE_PROJECT_ID", "")
+    access_token = await firebase_access_token()
+    if not project_id or not access_token:
+        return
+    message = {
+        "message": {
+            "token": token,
+            "notification": {"title": title, "body": body},
+            "data": {"payload": payload, "route": payload},
+            "android": {
+                "priority": "HIGH",
+                "notification": {
+                    "channel_id": "vivaahsetu_alerts_v2",
+                    "sound": "default",
+                    "default_vibrate_timings": True,
+                },
+            },
+        }
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=message,
+            )
+        if response.status_code >= 400:
+            logger.warning("FCM send failed: %s %s", response.status_code, response.text)
+    except Exception as exc:
+        logger.warning("FCM send failed: %s", exc)
+
+async def create_user_notification(user_ref: Any, notification: Dict[str, Any], payload: str = "notifications") -> None:
+    user = await find_user_by_ref(user_ref)
+    if not user:
+        return
+    await db.users.update_one({"_id": user["_id"]}, {"$push": {"notifications": notification}})
+    manager = globals().get("ws_manager")
+    if manager:
+        await manager.send_to_user(normalize_ref(user["_id"]), {"type": "notification_created", "notification": notification})
+    await send_push_to_user(
+        user,
+        "VivaahSetu update",
+        notification.get("message", "You have a new notification."),
+        payload,
+    )
+
+async def create_user_notification_once(
+    user_ref: Any,
+    notification: Dict[str, Any],
+    payload: str = "notifications",
+    *,
+    unique_key: str,
+) -> bool:
+    user = await find_user_by_ref(user_ref)
+    if not user:
+        return False
+    existing = await db.users.find_one(
+        {"_id": user["_id"], "notifications.key": unique_key},
+        {"_id": 1},
+    )
+    if existing:
+        return False
+    notification["key"] = unique_key
+    await create_user_notification(user["_id"], notification, payload)
+    return True
+
+async def create_profile_view_notification(viewed_user: dict, visitor: dict) -> None:
+    now = datetime.now(timezone.utc)
+    day_key = now.date().isoformat()
+    visitor_id = normalize_ref(visitor.get("_id"))
+    if not visitor_id:
+        return
+    visitor_name = visitor.get("name") or "Someone"
+    await create_user_notification_once(
+        viewed_user["_id"],
+        {
+            "id": str(uuid.uuid4()),
+            "type": "profile_visitor",
+            "fromUserId": visitor_id,
+            "fromUserName": visitor_name,
+            "message": f"{visitor_name} viewed your profile",
+            "read": False,
+            "createdAt": now.isoformat(),
+        },
+        f"profile:{visitor_id}",
+        unique_key=f"profile_view:{visitor_id}:{day_key}",
+    )
+
+def user_match_query_for(user: dict) -> Dict[str, Any]:
+    user_gender = (user.get("gender") or "").strip().lower()
+    blocked = normalize_ref_list(user.get("blockedUsers", []))
+    exclude_ids = [user["_id"]]
+    exclude_ids.extend(ObjectId(uid) for uid in set(blocked) if ObjectId.is_valid(uid))
+    query: Dict[str, Any] = {
+        "_id": {"$nin": exclude_ids},
+        "$and": [{"$or": visible_profile_or_conditions()}],
+    }
+    if user_gender == "male":
+        query["gender"] = gender_regex("female")
+    elif user_gender == "female":
+        query["gender"] = gender_regex("male")
+    return query
+
+async def ensure_daily_match_notification(current_user: dict, now: datetime) -> int:
+    day_key = now.date().isoformat()
+    query = user_match_query_for(current_user)
+    total = await db.users.count_documents(query)
+    if total <= 0:
+        return 0
+    sample = await db.users.find_one(query, {"name": 1})
+    sample_name = (sample or {}).get("name") or "a compatible profile"
+    created = await create_user_notification_once(
+        current_user["_id"],
+        {
+            "id": str(uuid.uuid4()),
+            "type": "daily_match",
+            "message": f"{total} compatible profiles are waiting today, including {sample_name}.",
+            "read": False,
+            "createdAt": now.isoformat(),
+        },
+        "matches",
+        unique_key=f"daily_match:{day_key}",
+    )
+    return 1 if created else 0
+
+async def ensure_connection_due_notifications(current_user: dict, now: datetime) -> int:
+    user_id = normalize_ref(current_user["_id"])
+    active_conns = await db.connections_data.find(
+        {"users": user_id, "status": "active", "expiresAt": {"$gt": now.isoformat()}},
+        {"_id": 0},
+    ).to_list(100)
+    created_count = 0
+    for conn in active_conns:
+        days = connection_days_remaining(conn.get("expiresAt"), now)
+        if days not in CONNECTION_REMINDER_DAYS:
+            continue
+        users_in_conn = normalize_ref_list(conn.get("users", []))
+        partner_id = next((ref for ref in users_in_conn if ref != user_id), "")
+        if not partner_id:
+            continue
+        partner = await find_user_by_ref(partner_id, {"name": 1})
+        partner_name = (partner or {}).get("name") or "your match"
+        label = "expires today" if days == 0 else f"has {days} day{'s' if days != 1 else ''} left"
+        created = await create_user_notification_once(
+            current_user["_id"],
+            {
+                "id": str(uuid.uuid4()),
+                "type": "connection_expiring",
+                "connectionId": conn.get("id", ""),
+                "fromUserId": partner_id,
+                "fromUserName": partner_name,
+                "message": f"Your connection with {partner_name} {label}. Request an extension if you need more time.",
+                "read": False,
+                "createdAt": now.isoformat(),
+            },
+            "connections",
+            unique_key=f"connection_due:{conn.get('id', '')}:{days}:{now.date().isoformat()}",
+        )
+        if created:
+            created_count += 1
+    return created_count
+
+async def ensure_user_notification_digest(current_user: dict) -> int:
+    now = datetime.now(timezone.utc)
+    created = 0
+    created += await ensure_daily_match_notification(current_user, now)
+    created += await ensure_connection_due_notifications(current_user, now)
+    return created
 
 def visible_profile_or_conditions() -> List[Dict[str, Any]]:
     return [
@@ -637,12 +928,19 @@ async def get_my_profile(current_user: dict = Depends(get_current_user)):
     profile = serialize_user(current_user)
     return {"user": profile, **profile}
 
+@api_router.put("/profile")
 @api_router.put("/profile/update")
 async def update_profile(data: ProfileUpdateInput, current_user: dict = Depends(get_current_user)):
     update = {k: v for k, v in data.model_dump().items() if v is not None}
     # Normalize snake_case/camelCase variants used across clients.
     update["dob"] = update.get("dob") or update.get("date_of_birth")
     update["date_of_birth"] = update.get("date_of_birth") or update.get("dob")
+    update["birthTime"] = update.get("birthTime") or update.get("birth_time")
+    update["birth_time"] = update.get("birth_time") or update.get("birthTime")
+    update["birthPlace"] = update.get("birthPlace") or update.get("birth_place")
+    update["birth_place"] = update.get("birth_place") or update.get("birthPlace")
+    update["profileManagedBy"] = update.get("profileManagedBy") or update.get("profile_managed_by")
+    update["profile_managed_by"] = update.get("profile_managed_by") or update.get("profileManagedBy")
     update["sub_caste"] = update.get("sub_caste") or update.get("subCaste")
     update["subCaste"] = update.get("subCaste") or update.get("sub_caste")
     update["motherTongue"] = update.get("motherTongue") or update.get("mother_tongue")
@@ -770,6 +1068,7 @@ async def get_user_profile(user_id: str, current_user: dict = Depends(get_curren
                 "visitedAt": datetime.now(timezone.utc).isoformat()
             }}}
         )
+        await create_profile_view_notification(target, current_user)
     profile = serialize_user(target)
     return {"user": profile, **profile}
 
@@ -784,6 +1083,8 @@ async def get_matches(
     caste: Optional[str] = None, city: Optional[str] = None,
     location: Optional[str] = None, profession: Optional[str] = None,
     occupation: Optional[str] = None,
+    profileManagedBy: Optional[str] = None,
+    profile_managed_by: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
     try:
@@ -845,6 +1146,17 @@ async def get_matches(
                         "$or": [
                             {"occupation": {"$regex": profession_or_occupation, "$options": "i"}},
                             {"profession": {"$regex": profession_or_occupation, "$options": "i"}},
+                        ]
+                    }
+                )
+            managed_by = (profileManagedBy or profile_managed_by or "").strip()
+            if managed_by:
+                query["$and"] = query.get("$and", [])
+                query["$and"].append(
+                    {
+                        "$or": [
+                            {"profileManagedBy": {"$regex": managed_by, "$options": "i"}},
+                            {"profile_managed_by": {"$regex": managed_by, "$options": "i"}},
                         ]
                     }
                 )
@@ -940,7 +1252,7 @@ async def send_connection_request(target_id: str, current_user: dict = Depends(g
         "read": False,
         "createdAt": datetime.now(timezone.utc).isoformat()
     }
-    await db.users.update_one({"_id": target_db_id}, {"$push": {"notifications": notification}})
+    await create_user_notification(target_db_id, notification, "connections")
     return {"message": "Connection request sent"}
 
 @api_router.post("/connections/accept/{requester_id}")
@@ -989,7 +1301,7 @@ async def accept_connection(requester_id: str, current_user: dict = Depends(get_
         "read": False,
         "createdAt": now.isoformat()
     }
-    await db.users.update_one({"_id": requester_user["_id"]}, {"$push": {"notifications": notification}})
+    await create_user_notification(requester_user["_id"], notification, "connections")
     return {"message": "Connection accepted", "expiresAt": expires_at.isoformat()}
 
 @api_router.post("/connections/reject/{requester_id}")
@@ -1026,6 +1338,124 @@ async def remove_connection(target_id: str, current_user: dict = Depends(get_cur
         await db.users.update_one({"_id": target_user["_id"]}, {"$pull": {"connections": user_id}})
     return {"message": "Connection removed"}
 
+@api_router.post("/connections/extend/request")
+async def request_connection_extension(payload: ConnectionExtensionRequest, current_user: dict = Depends(get_current_user)):
+    user_id = normalize_ref(current_user["_id"])
+    connection_id = (payload.connection_id or payload.connectionId or "").strip()
+    if not connection_id:
+        raise HTTPException(status_code=400, detail="connection_id is required")
+
+    now = datetime.now(timezone.utc)
+    conn = await db.connections_data.find_one(
+        {"id": connection_id, "users": user_id, "status": "active", "expiresAt": {"$gt": now.isoformat()}},
+        {"_id": 0},
+    )
+    if not conn:
+        raise HTTPException(status_code=404, detail="Active connection not found")
+    days_remaining = connection_days_remaining(conn.get("expiresAt"), now)
+    if days_remaining >= CONNECTION_DURATION_DAYS:
+        raise HTTPException(status_code=400, detail="Extension can be requested only when fewer than 15 days remain")
+
+    extension_request = conn.get("extensionRequest") or conn.get("extension_request") or {}
+    if extension_request.get("status") == "pending":
+        raise HTTPException(status_code=400, detail="Extension request is already pending")
+
+    users_in_conn = normalize_ref_list(conn.get("users", []))
+    partner_id = next((ref for ref in users_in_conn if ref != user_id), "")
+    if not partner_id:
+        raise HTTPException(status_code=400, detail="Connection partner not found")
+
+    request_doc = {
+        "status": "pending",
+        "requestedBy": user_id,
+        "requested_by": user_id,
+        "requestedAt": now.isoformat(),
+        "requested_at": now.isoformat(),
+    }
+    await db.connections_data.update_one(
+        {"id": connection_id},
+        {"$set": {"extensionRequest": request_doc, "extension_request": request_doc}},
+    )
+
+    partner = await find_user_by_ref(partner_id)
+    if partner:
+        notification = {
+            "id": str(uuid.uuid4()),
+            "type": "connection_extension_request",
+            "fromUserId": user_id,
+            "fromUserName": current_user.get("name", "Someone"),
+            "message": f"{current_user.get('name', 'Someone')} requested more time for your connection",
+            "read": False,
+            "createdAt": now.isoformat(),
+        }
+        await create_user_notification(partner["_id"], notification, "connections")
+
+    return {"message": "Extension request sent", "extensionRequest": request_doc, "extension_request": request_doc}
+
+@api_router.post("/connections/extend/approve/{connection_id}")
+async def approve_connection_extension(connection_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = normalize_ref(current_user["_id"])
+    now = datetime.now(timezone.utc)
+    conn = await db.connections_data.find_one(
+        {"id": connection_id, "users": user_id, "status": "active", "expiresAt": {"$gt": now.isoformat()}},
+        {"_id": 0},
+    )
+    if not conn:
+        raise HTTPException(status_code=404, detail="Active connection not found")
+
+    extension_request = conn.get("extensionRequest") or conn.get("extension_request") or {}
+    requested_by = normalize_ref(extension_request.get("requestedBy") or extension_request.get("requested_by"))
+    if extension_request.get("status") != "pending":
+        raise HTTPException(status_code=400, detail="No pending extension request")
+    if requested_by == user_id:
+        raise HTTPException(status_code=400, detail="The other user must approve this extension")
+
+    current_expiry = capped_connection_expiry(conn.get("expiresAt"), now)
+    new_expiry = min(
+        current_expiry + timedelta(days=CONNECTION_DURATION_DAYS),
+        now + timedelta(days=MAX_CONNECTION_DURATION_DAYS),
+    )
+    approved_doc = {
+        **extension_request,
+        "status": "approved",
+        "approvedBy": user_id,
+        "approved_by": user_id,
+        "approvedAt": now.isoformat(),
+        "approved_at": now.isoformat(),
+    }
+    await db.connections_data.update_one(
+        {"id": connection_id},
+        {
+            "$set": {
+                "expiresAt": new_expiry.isoformat(),
+                "extensionRequest": approved_doc,
+                "extension_request": approved_doc,
+            },
+            "$inc": {"extensions": 1},
+        },
+    )
+
+    requester = await find_user_by_ref(requested_by)
+    if requester:
+        notification = {
+            "id": str(uuid.uuid4()),
+            "type": "connection_extension_approved",
+            "fromUserId": user_id,
+            "fromUserName": current_user.get("name", "Someone"),
+            "message": f"{current_user.get('name', 'Someone')} approved your connection extension",
+            "read": False,
+            "createdAt": now.isoformat(),
+        }
+        await create_user_notification(requester["_id"], notification, "connections")
+
+    return {
+        "message": "Connection extended",
+        "expiresAt": new_expiry.isoformat(),
+        "expires_at": new_expiry.isoformat(),
+        "extensionRequest": approved_doc,
+        "extension_request": approved_doc,
+    }
+
 @api_router.get("/connections")
 async def get_connections(current_user: dict = Depends(get_current_user)):
     user_id = normalize_ref(current_user["_id"])
@@ -1045,10 +1475,26 @@ async def get_connections(current_user: dict = Depends(get_current_user)):
         other_id = users_in_conn[1] if users_in_conn[0] == user_id else users_in_conn[0]
         u = await find_user_by_ref(other_id, {"password_hash": 0})
         if u:
+            capped_expiry = capped_connection_expiry(conn["expiresAt"])
+            if capped_expiry.isoformat() != conn["expiresAt"]:
+                await db.connections_data.update_one(
+                    {"id": conn["id"]},
+                    {"$set": {"expiresAt": capped_expiry.isoformat()}},
+                )
             ud = serialize_user(u)
             ud["connectionId"] = conn["id"]
+            ud["connection_id"] = conn["id"]
             ud["connectedAt"] = conn["createdAt"]
-            ud["expiresAt"] = conn["expiresAt"]
+            ud["connected_at"] = conn["createdAt"]
+            ud["expiresAt"] = capped_expiry.isoformat()
+            ud["expires_at"] = capped_expiry.isoformat()
+            ud["daysRemaining"] = connection_days_remaining(capped_expiry)
+            ud["days_remaining"] = ud["daysRemaining"]
+            extension_request = conn.get("extensionRequest") or conn.get("extension_request")
+            if extension_request:
+                ud["extensionRequest"] = extension_request
+                ud["extension_request"] = extension_request
+            ud["extensions"] = conn.get("extensions", 0)
             connections.append(ud)
 
     # Pending received
@@ -1105,6 +1551,25 @@ async def send_message(msg: SendMessageInput, current_user: dict = Depends(get_c
     }
     await db.messages.insert_one(message_doc)
     message_doc.pop("_id", None)
+    manager = globals().get("ws_manager")
+    if manager:
+        await manager.send_to_user(user_id, {"type": "new_message", "message": message_doc})
+        await manager.send_to_user(receiver_id, {"type": "new_message", "message": message_doc})
+    await create_user_notification(
+        receiver_id,
+        {
+            "id": str(uuid.uuid4()),
+            "type": "chat_message",
+            "senderId": user_id,
+            "sender_id": user_id,
+            "fromUserName": current_user.get("name", "VivaahSetu"),
+            "message": f"New message from {current_user.get('name', 'VivaahSetu')}",
+            "preview": msg.content,
+            "read": False,
+            "createdAt": message_doc["createdAt"],
+        },
+        f"chat:{user_id}",
+    )
     return {"message": message_doc}
 
 @api_router.get("/chat/{partner_id}")
@@ -1134,7 +1599,31 @@ async def get_unread_count(current_user: dict = Depends(get_current_user)):
 
 @api_router.get("/notifications")
 async def get_notifications(current_user: dict = Depends(get_current_user)):
+    await ensure_connection_due_notifications(current_user, datetime.now(timezone.utc))
+    current_user = await db.users.find_one({"_id": current_user["_id"]}) or current_user
+    user_id = normalize_ref(current_user["_id"])
+    unread_chat_count = await db.messages.count_documents({"receiverId": user_id, "read": False})
     notifications = current_user.get("notifications", []) or []
+    if unread_chat_count > 0:
+        latest_chat = await db.messages.find_one(
+            {"receiverId": user_id, "read": False},
+            sort=[("createdAt", -1)],
+        )
+        sender_id = (latest_chat or {}).get("senderId", "")
+        sender = await find_user_by_ref(sender_id, {"name": 1}) if sender_id else None
+        sender_name = (sender or {}).get("name", "your match")
+        notifications = [
+            {
+                "id": "chat_unread",
+                "type": "chat_unread",
+                "senderId": sender_id,
+                "sender_id": sender_id,
+                "message": f"You have {unread_chat_count} unread chat message{'s' if unread_chat_count != 1 else ''} from {sender_name}",
+                "read": False,
+                "createdAt": (latest_chat or {}).get("createdAt", datetime.now(timezone.utc).isoformat()),
+            },
+            *notifications,
+        ]
     notifications.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
     return {"notifications": notifications[:50]}
 
@@ -1495,14 +1984,65 @@ async def health():
 
 class FCMTokenInput(BaseModel):
     token: str
+    platform: Optional[str] = None
 
 @api_router.post("/notifications/register-token")
 async def register_fcm_token(data: FCMTokenInput, current_user: dict = Depends(get_current_user)):
     await db.users.update_one(
         {"_id": current_user["_id"]},
-        {"$set": {"fcmToken": data.token, "fcmTokenUpdatedAt": datetime.now(timezone.utc).isoformat()}}
+        {"$set": {
+            "fcmToken": data.token,
+            "fcmPlatform": data.platform or "unknown",
+            "fcmTokenUpdatedAt": datetime.now(timezone.utc).isoformat(),
+        }}
     )
     return {"message": "Token registered"}
+
+@api_router.post("/notifications/device-token")
+async def register_device_token(data: FCMTokenInput, current_user: dict = Depends(get_current_user)):
+    return await register_fcm_token(data, current_user)
+
+@api_router.post("/notifications/digest")
+async def create_notification_digest(current_user: dict = Depends(get_current_user)):
+    created = await ensure_user_notification_digest(current_user)
+    return {"message": "Digest queued", "created": created}
+
+# ============ FEEDBACK ============
+
+@api_router.post("/feedback")
+@api_router.post("/feedback/report")
+@api_router.post("/bug-report")
+async def submit_feedback(data: FeedbackInput, current_user: dict = Depends(get_current_user)):
+    category = (data.category or "feedback").strip().lower()
+    if category not in {"feedback", "bug"}:
+        category = "feedback"
+    message = (data.message or "").strip()
+    if len(message) < 5:
+        raise HTTPException(status_code=400, detail="Please enter more details")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "userId": normalize_ref(current_user["_id"]),
+        "userName": current_user.get("name", ""),
+        "userEmail": current_user.get("email", ""),
+        "category": category,
+        "subject": (data.subject or "").strip(),
+        "message": message,
+        "screen": (data.screen or "").strip(),
+        "status": "open",
+        "createdAt": now,
+    }
+    await db.feedback.insert_one(doc)
+    notification = {
+        "id": str(uuid.uuid4()),
+        "type": "feedback_received" if category == "feedback" else "bug_report_received",
+        "message": "Thanks for your feedback. Our team will review it." if category == "feedback" else "Bug report received. We will investigate it.",
+        "read": False,
+        "createdAt": now,
+    }
+    await create_user_notification(current_user["_id"], notification, "notifications")
+    doc.pop("_id", None)
+    return {"message": "Submitted", "item": doc}
 
 # ============ WEBSOCKET CHAT ============
 
@@ -1567,6 +2107,23 @@ async def websocket_chat(websocket: WebSocket, token: str):
                 # Send to both sender and receiver
                 await ws_manager.send_to_user(user_id, {"type": "new_message", "message": msg_doc})
                 await ws_manager.send_to_user(receiver_id, {"type": "new_message", "message": msg_doc})
+                sender = await find_user_by_ref(user_id)
+                sender_name = (sender or {}).get("name", "VivaahSetu")
+                await create_user_notification(
+                    receiver_id,
+                    {
+                        "id": str(uuid.uuid4()),
+                        "type": "chat_message",
+                        "senderId": user_id,
+                        "sender_id": user_id,
+                        "fromUserName": sender_name,
+                        "message": f"New message from {sender_name}",
+                        "preview": content,
+                        "read": False,
+                        "createdAt": msg_doc["createdAt"],
+                    },
+                    f"chat:{user_id}",
+                )
 
             elif action == "mark_read":
                 partner_id = data.get("partnerId")
