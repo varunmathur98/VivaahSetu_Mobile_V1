@@ -1252,20 +1252,50 @@ class ApiClient {
     String token,
     Map<String, dynamic> data,
   ) async {
-    try {
-      return _normalizeResponseMap(
-        Map<String, dynamic>.from(
-          await _request('PUT', '/profile', token: token, data: data) as Map,
-        ),
-      );
-    } catch (_) {
-      return _normalizeResponseMap(
-        Map<String, dynamic>.from(
-          await _request('PUT', '/profile/update', token: token, data: data)
-              as Map,
-        ),
+    final expected = <String, String>{
+      'birthTime': data['birthTime']?.toString().trim() ?? '',
+      'birthPlace': data['birthPlace']?.toString().trim() ?? '',
+      'profileManagedBy': data['profileManagedBy']?.toString().trim() ?? '',
+    };
+
+    bool hasExpectedFields(Map<String, dynamic> response) {
+      for (final entry in expected.entries) {
+        if (entry.value.isEmpty) continue;
+        final aliases = switch (entry.key) {
+          'birthTime' => ['birthTime', 'birth_time'],
+          'birthPlace' => ['birthPlace', 'birth_place'],
+          'profileManagedBy' => ['profileManagedBy', 'profile_managed_by'],
+          _ => [entry.key],
+        };
+        final value = aliases
+            .map((key) => response[key]?.toString().trim() ?? '')
+            .firstWhere((item) => item.isNotEmpty, orElse: () => '');
+        if (value != entry.value) return false;
+      }
+      return true;
+    }
+
+    Exception? lastError;
+    Map<String, dynamic>? lastResponse;
+    for (final path in ['/profile/update', '/profile']) {
+      try {
+        final response = _normalizeResponseMap(
+          Map<String, dynamic>.from(
+            await _request('PUT', path, token: token, data: data) as Map,
+          ),
+        );
+        lastResponse = response;
+        if (hasExpectedFields(response)) return response;
+      } catch (e) {
+        lastError = e is Exception ? e : Exception(e.toString());
+      }
+    }
+    if (lastResponse != null) {
+      throw Exception(
+        'Profile saved, but birth details were not returned by the server. Please deploy the latest backend and try again.',
       );
     }
+    throw lastError ?? Exception('Unable to update profile');
   }
 
   Future<Map<String, dynamic>> matches(
@@ -1885,16 +1915,16 @@ class _VSStartupSplashState extends State<VSStartupSplash>
                     child: ScaleTransition(
                       scale: _scale,
                       child: Container(
-                        width: 188,
-                        height: 188,
-                        padding: const EdgeInsets.all(14),
+                        width: 260,
+                        height: 260,
+                        padding: const EdgeInsets.all(6),
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
-                            colors: [Colors.white, Color(0xFFFFF4DC)],
+                            colors: [Color(0xFFFFFFFF), Color(0xFFFFF8E8)],
                             begin: Alignment.topLeft,
                             end: Alignment.bottomRight,
                           ),
-                          borderRadius: BorderRadius.circular(52),
+                          borderRadius: BorderRadius.circular(40),
                           border: Border.all(
                             color: Colors.white.withValues(alpha: 0.80),
                             width: 2,
@@ -1914,7 +1944,7 @@ class _VSStartupSplashState extends State<VSStartupSplash>
                       ),
                     ),
                   ),
-                  const SizedBox(height: 22),
+                  const SizedBox(height: 14),
                   const Text(
                     'VivaahSetu',
                     style: TextStyle(
@@ -5884,11 +5914,13 @@ class _BrowseTabState extends State<BrowseTab> {
                                             'Managed by ${(p['profileManagedBy'] ?? p['profile_managed_by'] ?? 'Self')}',
                                       ),
                                       const SizedBox(height: 14),
-                                      _KundliCompatibilityCard(
-                                        currentUser: widget.user,
-                                        match: p,
-                                        compact: true,
-                                      ),
+                                      if (!_isPaidUser(widget.user) ||
+                                          _kundliReport(widget.user, p) != null)
+                                        _KundliCompatibilityCard(
+                                          currentUser: widget.user,
+                                          match: p,
+                                          compact: true,
+                                        ),
                                       if (p['requestSent'] == true)
                                         Padding(
                                           padding: const EdgeInsets.only(
@@ -6219,7 +6251,7 @@ class _ConnectionsTabState extends State<ConnectionsTab>
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Mutual matches stay focused with a 30-day maximum window.',
+                    'Mutual matches stay focused with a 30-day maximum window. If both families need more time, send an extension request and extend the window by mutual agreement.',
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.35,
@@ -8588,7 +8620,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
         return;
       }
       final preferredMaxAge = int.tryParse(_prefAgeMax.text.trim());
-      await widget.api.updateProfile(widget.token, {
+      final savePayload = {
         'name': name,
         'dob': dob,
         'date_of_birth': dob,
@@ -8640,8 +8672,20 @@ class _EditProfilePageState extends State<EditProfilePage> {
           'diet': _preferenceList(_prefDiet),
           'manglik': _preferenceList(_prefManglik),
         },
-      });
-      final updated = await widget.api.me(widget.token);
+      };
+      final saved = await widget.api.updateProfile(widget.token, savePayload);
+      final refreshed = await widget.api.me(widget.token);
+      final updated = <String, dynamic>{...saved, ...refreshed};
+      for (final entry in {
+        'birthTime': _birthTime.text.trim(),
+        'birth_time': _birthTime.text.trim(),
+        'birthPlace': _birthPlace.text.trim(),
+        'birth_place': _birthPlace.text.trim(),
+        'profileManagedBy': _selectedProfileManagedBy ?? 'Self',
+        'profile_managed_by': _selectedProfileManagedBy ?? 'Self',
+      }.entries) {
+        updated[entry.key] = entry.value;
+      }
       if (!mounted) return;
       if (widget.onProfileSaved != null) {
         await widget.onProfileSaved!(updated);
@@ -12933,17 +12977,28 @@ class _ConnectionCard extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  SizedBox(
-                    width: 58,
-                    height: 68,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: _PhotoCarousel(
-                        profile: galleryProfile,
-                        height: 68,
-                        radius: BorderRadius.circular(14),
-                        showTapHint: false,
-                      ),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: SizedBox(
+                      width: 58,
+                      height: 68,
+                      child: photos.isEmpty
+                          ? _CoverPhoto(
+                              profile: galleryProfile,
+                              height: 68,
+                              radius: BorderRadius.circular(14),
+                            )
+                          : _SmartImage(
+                              source: photos.first,
+                              width: 58,
+                              height: 68,
+                              fit: BoxFit.contain,
+                              fallback: () => _CoverPhoto(
+                                profile: galleryProfile,
+                                height: 68,
+                                radius: BorderRadius.circular(14),
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 12),
